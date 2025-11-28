@@ -534,7 +534,7 @@ class IngestPipeline:
 async def main():
     """CLI entry point."""
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)  # Override system env vars with .env
 
     if len(sys.argv) < 2:
         print("Ingest Pipeline - Process Chat Exports")

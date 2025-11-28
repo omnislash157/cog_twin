@@ -1,0 +1,57 @@
+[project]
+name = "cog_twin"
+version = "0.1.0"
+description = "External cognitive memory engine - We are Venom"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    # Core
+    "numpy>=1.24.0",
+
+    # Clustering
+    "hdbscan>=0.8.33",
+    "scikit-learn>=1.3.0",
+
+    # Vector search
+    "faiss-cpu>=1.7.4",  # Use faiss-gpu if you have CUDA
+
+    # LLM clients (pick what you need)
+    "anthropic>=0.18.0",
+    "openai>=1.12.0",
+    # "xai-sdk",  # Grok - uncomment when available
+
+    # Embeddings (DeepInfra for BGE-M3)
+    "httpx>=0.27.0",
+
+    # Optional: better JSON streaming
+    "ijson>=3.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+]
+
+spacy = [
+    "spacy>=3.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]  # Line length handled separately
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

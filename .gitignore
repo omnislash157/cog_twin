@@ -64,3 +64,8 @@ clusters/
 
 # Claude settings (personal)
 .claude/
+
+# Chat exports (personal data - never commit)
+chat_exports/
+*.conversations.json
+*_export_*.json

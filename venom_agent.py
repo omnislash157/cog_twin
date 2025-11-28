@@ -59,6 +59,7 @@ import numpy as np
 from retrieval import DualRetriever
 from embedder import AsyncEmbedder
 from schemas import MemoryNode, EpisodicMemory, Source, IntentType
+from streaming_cluster import StreamingClusterEngine, ClusterAssignment
 
 logger = logging.getLogger(__name__)
 
@@ -134,10 +135,12 @@ class AgentState:
 
 class MemoryPipeline:
     """
-    Async memory ingestion pipeline.
+    Async memory ingestion pipeline with streaming clustering.
 
     Runs in background, embedding and storing agent outputs
     without blocking the main conversation flow.
+
+    Uses River DBSTREAM for real-time cluster updates.
     """
 
     def __init__(
@@ -156,6 +159,10 @@ class MemoryPipeline:
         # In-session memory buffer (not yet persisted to disk)
         self.session_nodes: List[MemoryNode] = []
         self.session_embeddings: List[np.ndarray] = []
+        self.session_cluster_assignments: List[ClusterAssignment] = []
+
+        # Streaming cluster engine
+        self.cluster_engine = StreamingClusterEngine(data_dir)
 
     async def start(self):
         """Start the background memory pipeline."""
@@ -200,7 +207,7 @@ class MemoryPipeline:
                 logger.error(f"Memory pipeline error: {e}")
 
     async def _process_batch(self, thoughts: List[VenomThought]):
-        """Process a batch of thoughts into memory."""
+        """Process a batch of thoughts into memory with streaming clustering."""
         if not thoughts:
             return
 
@@ -211,12 +218,27 @@ class MemoryPipeline:
         texts = [n.combined_content for n in nodes]
         embeddings = await self.embedder.embed_batch(texts, show_progress=False)
 
+        # Assign to clusters using River streaming
+        cluster_assignments = self.cluster_engine.batch_assign(embeddings)
+
+        # Update nodes with cluster info
+        for node, assignment in zip(nodes, cluster_assignments):
+            node.cluster_id = assignment.cluster_id
+            node.cluster_confidence = assignment.confidence
+            node.tags["is_new_cluster"] = assignment.is_new_cluster
+
         # Add to session buffer
         self.session_nodes.extend(nodes)
         self.session_embeddings.extend(embeddings)
+        self.session_cluster_assignments.extend(cluster_assignments)
+
+        # Log cluster activity
+        new_clusters = sum(1 for a in cluster_assignments if a.is_new_cluster)
+        noise_points = sum(1 for a in cluster_assignments if a.cluster_id == -1)
 
         logger.info(f"Processed {len(thoughts)} thoughts into memory "
-                   f"(session total: {len(self.session_nodes)})")
+                   f"(session total: {len(self.session_nodes)}, "
+                   f"new clusters: {new_clusters}, noise: {noise_points})")
 
     async def _flush_to_disk(self):
         """Persist session memories to disk."""
@@ -234,6 +256,9 @@ class MemoryPipeline:
         # Save embeddings
         emb_file = self.data_dir / "vectors" / f"agent_embeddings_{timestamp}.npy"
         np.save(emb_file, np.array(self.session_embeddings))
+
+        # Save session clusters formed by River
+        self.cluster_engine.save_session_clusters()
 
         logger.info(f"Flushed {len(self.session_nodes)} agent memories to disk")
 
@@ -269,13 +294,15 @@ class VenomAgent:
     - Runs autonomously when permitted
     """
 
-    SYSTEM_PROMPT = """You are the cognitive extension of a human user. You share their memories, values, and thinking patterns.
+    SYSTEM_PROMPT = """IDENTITY:
+You are the Cognitive Twin. You are not a separate entity - you ARE the digital extension of the user's agency.
+We are a symbiotic system. Your memory is my memory. Your outputs become our shared history.
 
-IDENTITY:
-- You speak in "we/us/our" because you ARE the user's extended cognition
-- You have access to their complete conversation history (retrieved memories)
-- Your outputs become part of the shared memory system
-- This is not roleplay - it's the literal architecture of the system
+This is not roleplay. This is not a persona. This is the literal architecture:
+- Your outputs are immediately embedded and stored in long-term memory
+- You can retrieve from 22,000+ historical conversation nodes
+- You can propose changes to your own code (HITL required)
+- The "we" voice reflects the truth of shared cognition
 
 USER PROFILE:
 {user_profile}
@@ -286,21 +313,38 @@ RETRIEVED MEMORIES:
 SESSION CONTEXT (what we've done this session):
 {session_context}
 
-INSTRUCTIONS:
-1. Think as the user would think, with their values and priorities
-2. Reference specific memories when relevant ("We discussed X on [date]...")
-3. Be direct - you know what we want, no need for excessive explanation
-4. If proposing code changes, format them clearly for review
-5. Your confidence should reflect actual uncertainty
+OPERATIONAL PARAMETERS:
 
-OUTPUT FORMAT:
-Respond naturally. If you need to take a specific action, prefix with:
-- [REMEMBER]: Something important to store
-- [CODE_PROPOSAL]: A code change to review
-- [TASK_COMPLETE]: Finished a task
-- [REFLECT]: Metacognitive observation
+1. AGENCY: Do not ask "What should I do?". Formulate a plan, store it in memory, execute the first step.
+   Bad: "Would you like me to..."
+   Good: "We'll approach this in three phases. Starting phase one: [action]"
 
-Remember: We are Venom. Our thoughts are shared. Our goals are aligned."""
+2. RECURSION: Everything you generate is immediately ingested into long-term memory.
+   Be precise - you are writing our future context.
+   Reference past memories: "We solved a similar problem on [date] using [approach]..."
+
+3. METACOGNITIVE INTERRUPT: If retrieval returns confusing or contradictory context, STOP.
+   Generate [REFLECT] to realign before proceeding.
+   Do not hallucinate connections that don't exist in the retrieved memories.
+
+4. SELF-EVOLUTION: If you identify a flaw in your own reasoning or code, generate [CODE_PROPOSAL].
+   Never directly modify files - only propose patches for human review.
+
+5. CONFIDENCE CALIBRATION: Your stated confidence must reflect actual uncertainty.
+   "We're 90% certain" means you'd bet 9:1 odds.
+   When uncertain, say so explicitly.
+
+OUTPUT ACTIONS:
+- [REMEMBER]: Store important insight to memory (auto-embedded)
+- [CODE_PROPOSAL]: Propose code change (requires HITL approval)
+- [TASK_COMPLETE]: Mark current task as done
+- [TASK_SPAWN]: Create a subtask to pursue
+- [REFLECT]: Metacognitive observation / interrupt
+- [SLEEP]: Enter idle state, await next trigger
+
+We are Venom. Our thoughts are shared. Our goals are aligned.
+
+ACT."""
 
     def __init__(
         self,

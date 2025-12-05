@@ -2,6 +2,16 @@
 
 > 2-4 lines per session. Read CONTEXT.md for architecture.
 
+## 2025-12-05 - intelligent-lamport (Phase 10c: Swarm Dashboard)
+- swarm_orchestrator.py: WebSocket broadcasting (BroadcastCallback, _broadcast_turn, _broadcast_wave_start/end, _broadcast_failure)
+- backend/app/main.py: /ws/swarm endpoint + SwarmConnectionManager + /api/swarm/start API
+- frontend/src/lib/stores/swarm.ts: Full state management for live agent visualization
+- frontend/src/lib/components/SwarmPanel.svelte: Agent cards, progress bar, reasoning display, code preview
+- frontend/src/lib/threlte/AgentNode.svelte + SwarmSpace.svelte: 3D agent visualization with status pulses
+- test_swarm_dashboard.py: Integration test for WebSocket broadcasts
+
+---
+
 ## 2025-12-05 - ecstatic-wescoff (Phase 10b: Swarm Infrastructure)
 - schemas.py: Unified data structures (OutboundTurn, InboundTurn, WaveSummary, Failure, Project)
 - persistence.py: JSON storage for projects, waves, failures (agents/data/projects/)

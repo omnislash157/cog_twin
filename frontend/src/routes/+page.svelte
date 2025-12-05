@@ -6,6 +6,7 @@
 	import { visibleArtifacts, panels, closedPanels, workspaces } from '$lib/stores';
 	import ArtifactPane from '$lib/components/ArtifactPane.svelte';
 	import AnalyticsDashboard from '$lib/components/AnalyticsDashboard.svelte';
+	import SwarmPanel from '$lib/components/SwarmPanel.svelte';
 	import FloatingPanel from '$lib/components/FloatingPanel.svelte';
 	import WorkspaceNav from '$lib/components/WorkspaceNav.svelte';
 	import MemoryCanvas from '$lib/threlte/MemoryCanvas.svelte';
@@ -128,7 +129,8 @@
 		memory3d: { label: '3D Space', icon: '🧠' },
 		chat: { label: 'Chat', icon: '💬' },
 		artifacts: { label: 'Artifacts', icon: '📦' },
-		analytics: { label: 'Analytics', icon: '📊' }
+		analytics: { label: 'Analytics', icon: '📊' },
+		swarm: { label: 'Swarm', icon: '🐝' }
 	};
 </script>
 
@@ -232,7 +234,7 @@
 		</FloatingPanel>
 
 		<!-- Right side container for docked panels -->
-		<div class="right-panels" class:has-docked={$panels.chat.mode === 'docked' || $panels.artifacts.mode === 'docked' || $panels.analytics.mode === 'docked'}>
+		<div class="right-panels" class:has-docked={$panels.chat.mode === 'docked' || $panels.artifacts.mode === 'docked' || $panels.analytics.mode === 'docked' || $panels.swarm?.mode === 'docked'}>
 			<!-- Chat Panel -->
 			<FloatingPanel panelId="chat" title="Chat" icon="💬">
 				<div class="chat-section">
@@ -281,6 +283,11 @@
 			<!-- Analytics Panel -->
 			<FloatingPanel panelId="analytics" title="Cognitive State" icon="📊">
 				<AnalyticsDashboard />
+			</FloatingPanel>
+
+			<!-- Swarm Dashboard Panel -->
+			<FloatingPanel panelId="swarm" title="Swarm Dashboard" icon="🐝">
+				<SwarmPanel />
 			</FloatingPanel>
 		</div>
 	</main>

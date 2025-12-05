@@ -21,8 +21,9 @@ export interface PanelsState {
 	chat: PanelState;
 	artifacts: PanelState;
 	analytics: PanelState;
+	swarm: PanelState;
 	// Track which panel is focused (highest z-index)
-	focusedPanel: 'memory3d' | 'chat' | 'artifacts' | 'analytics' | null;
+	focusedPanel: 'memory3d' | 'chat' | 'artifacts' | 'analytics' | 'swarm' | null;
 	// Base z-index counter
 	zCounter: number;
 }
@@ -61,6 +62,13 @@ const initialState: PanelsState = {
 		y: 150,
 		width: 380,
 		height: 450
+	},
+	swarm: {
+		...DEFAULT_PANEL_STATE,
+		x: 250,
+		y: 50,
+		width: 600,
+		height: 500
 	},
 	focusedPanel: null,
 	zCounter: 100
@@ -195,7 +203,8 @@ export const hasFullscreenPanel = derived(panels, $panels =>
 	$panels.memory3d.mode === 'fullscreen' ||
 	$panels.chat.mode === 'fullscreen' ||
 	$panels.artifacts.mode === 'fullscreen' ||
-	$panels.analytics.mode === 'fullscreen'
+	$panels.analytics.mode === 'fullscreen' ||
+	$panels.swarm.mode === 'fullscreen'
 );
 
 // Derived store for closed panels (for panel switcher UI)
@@ -205,5 +214,6 @@ export const closedPanels = derived(panels, $panels => {
 	if ($panels.chat.mode === 'closed') closed.push('chat');
 	if ($panels.artifacts.mode === 'closed') closed.push('artifacts');
 	if ($panels.analytics.mode === 'closed') closed.push('analytics');
+	if ($panels.swarm.mode === 'closed') closed.push('swarm');
 	return closed;
 });

@@ -1,11 +1,12 @@
 """
-SwarmOrchestrator - New orchestrator with full persistence.
+SwarmOrchestrator - New orchestrator with full persistence and WebSocket broadcasting.
 Import this into orchestrator.py.
 """
 import re
 import time
+import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 from .registry import AgentRole, spawn_agent, AGENTS
 from .schemas import (
@@ -16,6 +17,10 @@ from .schemas import (
 from .persistence import SwarmPersistence
 from .reasoning import extract_reasoning_trace
 from .holders import CodeHolder, ConvoHolder, HolderQuery
+
+
+# Type for WebSocket broadcast callback
+BroadcastCallback = Callable[[str], Awaitable[None]]
 
 
 KNOWN_PACKAGES = {
@@ -29,9 +34,16 @@ class SwarmOrchestrator:
     """
     Main orchestrator for multi-agent coding swarm.
     Full persistence of every turn, failure tracking, holder queries.
+    Now with WebSocket broadcasting for live dashboard updates.
     """
 
-    def __init__(self, project_root: Path, project_name: str, goal: str):
+    def __init__(
+        self,
+        project_root: Path,
+        project_name: str,
+        goal: str,
+        broadcast_callback: Optional[BroadcastCallback] = None
+    ):
         self.project_root = Path(project_root)
         self.persistence = SwarmPersistence()
         self.project = self.persistence.create_project(project_name, goal)
@@ -42,6 +54,82 @@ class SwarmOrchestrator:
         self.wave_tokens_in: int = 0
         self.wave_tokens_out: int = 0
         self.wave_agents: List[str] = []
+        self._broadcast = broadcast_callback
+
+    async def _broadcast_event(self, event: Dict[str, Any]) -> None:
+        """Broadcast event to WebSocket clients if callback is set."""
+        if self._broadcast:
+            try:
+                await self._broadcast(json.dumps(event))
+            except Exception as e:
+                print(f"[BROADCAST] Error: {e}")
+
+    async def _broadcast_turn(self, outbound: OutboundTurn, inbound: InboundTurn) -> None:
+        """Broadcast turn completion to WebSocket clients."""
+        event = {
+            "type": "swarm_turn",
+            "project_id": self.project.id,
+            "wave": self.current_wave,
+            "sequence": self.sequence,
+            "agent": inbound.from_agent,
+            "tokens_in": outbound.tokens_in,
+            "tokens_out": inbound.tokens_out,
+            "latency_ms": inbound.latency_ms,
+            "reasoning": [
+                {"step": r.step, "content": r.content}
+                for r in inbound.reasoning_trace
+            ],
+            "preview": inbound.raw_response[:500],
+            "parsed": inbound.parsed,
+            "timestamp": now_iso(),
+            "wave_progress": {
+                "current_agent": inbound.from_agent,
+                "agents_completed": self.wave_agents.copy(),
+                "total_tokens_in": self.wave_tokens_in,
+                "total_tokens_out": self.wave_tokens_out,
+            }
+        }
+        await self._broadcast_event(event)
+
+    async def _broadcast_wave_start(self, task: str) -> None:
+        """Broadcast wave start event."""
+        event = {
+            "type": "swarm_wave_start",
+            "project_id": self.project.id,
+            "wave": self.current_wave,
+            "task": task,
+            "timestamp": now_iso(),
+        }
+        await self._broadcast_event(event)
+
+    async def _broadcast_wave_end(self, summary: WaveSummary) -> None:
+        """Broadcast wave completion event."""
+        event = {
+            "type": "swarm_wave_end",
+            "project_id": self.project.id,
+            "wave": self.current_wave,
+            "verdict": summary.verdict,
+            "total_tokens_in": summary.total_tokens_in,
+            "total_tokens_out": summary.total_tokens_out,
+            "files_modified": summary.files_modified,
+            "summary": summary.summary,
+            "timestamp": now_iso(),
+        }
+        await self._broadcast_event(event)
+
+    async def _broadcast_failure(self, failure: Failure) -> None:
+        """Broadcast failure event for dashboard alerts."""
+        event = {
+            "type": "swarm_failure",
+            "project_id": self.project.id,
+            "wave": self.current_wave,
+            "failure_type": failure.failure_type,
+            "agent_blamed": failure.agent_blamed,
+            "root_cause": failure.root_cause,
+            "recommendation": failure.recommendation,
+            "timestamp": now_iso(),
+        }
+        await self._broadcast_event(event)
 
     async def run_project(self, tasks: List[str], max_waves: int = 10) -> Project:
         """Run full project through wave loop."""
@@ -150,6 +238,7 @@ Provide your verdict."""
                 config_response.raw_response, executor_response.raw_response
             )
             self.persistence.save_failure(self.project.id, failure)
+            await self._broadcast_failure(failure)
             summary = WaveSummary(
                 wave=self.current_wave, started_at=started_at, task=task,
                 agents_invoked=self.wave_agents, turns_count=self.sequence,
@@ -208,6 +297,10 @@ Provide your verdict."""
         self.wave_tokens_out += inbound.tokens_out
         self.wave_agents.append(to_agent)
         print(f"[{to_agent.upper()}] Done. {inbound.tokens_out} tokens, {latency}ms")
+
+        # Broadcast turn completion
+        await self._broadcast_turn(outbound, inbound)
+
         return inbound
 
     def _parse_agent_response(self, response: str, agent: str) -> Dict[str, Any]:
@@ -282,6 +375,19 @@ Provide your verdict."""
             )]
         )
         self.persistence.save_files_written(self.project.id, self.current_wave, files_written)
+
+        # Broadcast file write
+        await self._broadcast_event({
+            "type": "swarm_file_written",
+            "project_id": self.project.id,
+            "wave": self.current_wave,
+            "file_path": target_file,
+            "operation": files_written.operations[0].operation,
+            "lines_added": files_written.operations[0].lines_added,
+            "preview": code[:500],
+            "timestamp": now_iso(),
+        })
+
         return files_modified
 
     def _generate_summary(

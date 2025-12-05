@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import tempfile
 import asyncio
+import json
 from pathlib import Path
+from typing import Set
 
 from app.config import settings
 
@@ -13,6 +15,7 @@ sys.path.insert(0, str(settings.engine_path))
 from cog_twin import CogTwin
 from chat_parser_agnostic import ChatParserFactory
 from ingest import IngestPipeline
+from agents.swarm_orchestrator import SwarmOrchestrator
 
 from app.artifacts.parser import extract_artifacts
 from app.artifacts.actions import ArtifactEmit
@@ -218,6 +221,46 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
+class SwarmConnectionManager:
+    """Manages WebSocket connections for swarm dashboard."""
+    
+    def __init__(self):
+        self.active_connections: Set[WebSocket] = set()
+        self.current_project: str | None = None
+        self.swarm_active: bool = False
+    
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.add(websocket)
+        print(f"[SWARM-WS] Client connected. Active: {len(self.active_connections)}")
+    
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.discard(websocket)
+        print(f"[SWARM-WS] Client disconnected. Active: {len(self.active_connections)}")
+    
+    async def broadcast(self, message: str):
+        """Broadcast message to all connected swarm clients."""
+        disconnected = set()
+        for ws in self.active_connections:
+            try:
+                await ws.send_text(message)
+            except Exception:
+                disconnected.add(ws)
+        for ws in disconnected:
+            self.active_connections.discard(ws)
+    
+    async def broadcast_json(self, data: dict):
+        """Broadcast JSON to all connected swarm clients."""
+        await self.broadcast(json.dumps(data))
+
+
+swarm_manager = SwarmConnectionManager()
+
+# Active swarm orchestrator
+active_swarm: SwarmOrchestrator | None = None
+
+
 # Global CogTwin engine instance
 engine: CogTwin | None = None
 
@@ -350,6 +393,118 @@ async def get_ingest_status(job_id: str):
 async def list_ingest_jobs():
     """List all ingest jobs."""
     return ingest_jobs
+
+
+
+
+# ===== SWARM DASHBOARD ENDPOINTS =====
+
+@app.get("/api/swarm/status")
+async def get_swarm_status():
+    """Get current swarm status."""
+    return {
+        "active": swarm_manager.swarm_active,
+        "current_project": swarm_manager.current_project,
+        "connected_clients": len(swarm_manager.active_connections),
+    }
+
+
+@app.post("/api/swarm/start")
+async def start_swarm(
+    background_tasks: BackgroundTasks,
+    project_name: str = "swarm_project",
+    goal: str = "Build feature",
+    tasks: list[str] = None
+):
+    """Start a new swarm project."""
+    global active_swarm
+    
+    if swarm_manager.swarm_active:
+        raise HTTPException(400, "Swarm already running")
+    
+    if not tasks:
+        tasks = ["Implement the requested feature"]
+    
+    swarm_manager.swarm_active = True
+    swarm_manager.current_project = project_name
+    
+    # Create orchestrator with broadcast callback
+    active_swarm = SwarmOrchestrator(
+        project_root=settings.engine_path,
+        project_name=project_name,
+        goal=goal,
+        broadcast_callback=swarm_manager.broadcast
+    )
+    
+    # Run in background
+    async def run_swarm():
+        global active_swarm
+        try:
+            await active_swarm.run_project(tasks)
+        finally:
+            swarm_manager.swarm_active = False
+            active_swarm = None
+    
+    background_tasks.add_task(run_swarm)
+    
+    return {
+        "status": "started",
+        "project_id": active_swarm.project.id,
+        "project_name": project_name,
+        "goal": goal,
+        "tasks": tasks,
+    }
+
+
+@app.websocket("/ws/swarm")
+async def swarm_websocket(websocket: WebSocket):
+    """WebSocket endpoint for live swarm updates."""
+    await swarm_manager.connect(websocket)
+    
+    try:
+        # Send initial status
+        await websocket.send_json({
+            "type": "swarm_status",
+            "active": swarm_manager.swarm_active,
+            "current_project": swarm_manager.current_project,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+        while True:
+            data = await websocket.receive_text()
+            
+            try:
+                msg = json.loads(data)
+                msg_type = msg.get("type", "")
+                
+                if msg_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+                
+                elif msg_type == "status":
+                    await websocket.send_json({
+                        "type": "swarm_status",
+                        "active": swarm_manager.swarm_active,
+                        "current_project": swarm_manager.current_project,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                
+                else:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Unknown message type: {msg_type}"
+                    })
+            
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid JSON"
+                })
+    
+    except WebSocketDisconnect:
+        swarm_manager.disconnect(websocket)
+    except Exception as e:
+        print(f"[SWARM-WS] Error: {e}")
+        swarm_manager.disconnect(websocket)
 
 
 @app.websocket("/ws/{session_id}")

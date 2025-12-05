@@ -2,7 +2,9 @@
   import { Canvas } from '@threlte/core';
   import Scene from './Scene.svelte';
   import MemorySpace from './MemorySpace.svelte';
+  import SwarmSpace from './SwarmSpace.svelte';
   import { createEventDispatcher } from 'svelte';
+  import { swarm } from '$lib/stores';
 
   export let memories: Array<{
     id: string;
@@ -13,6 +15,9 @@
     readonly?: boolean;
     parentIds?: string[];
   }> = [];
+
+  // View mode: 'memory' or 'swarm'
+  export let mode: 'memory' | 'swarm' = 'memory';
 
   const dispatch = createEventDispatcher<{
     selectMemory: { id: string };
@@ -26,23 +31,45 @@
   function handleSynthesize(e: CustomEvent<{ sourceId: string; targetId: string }>) {
     dispatch('synthesize', e.detail);
   }
+
+  function toggleMode() {
+    mode = mode === 'memory' ? 'swarm' : 'memory';
+  }
 </script>
 
 <div class="canvas-container">
   <Canvas>
     <Scene />
-    <MemorySpace
-      {memories}
-      on:selectMemory={handleSelectMemory}
-      on:synthesize={handleSynthesize}
-    />
+    {#if mode === 'swarm'}
+      <SwarmSpace />
+    {:else}
+      <MemorySpace
+        {memories}
+        on:selectMemory={handleSelectMemory}
+        on:synthesize={handleSynthesize}
+      />
+    {/if}
   </Canvas>
 
   <!-- Overlay HUD -->
   <div class="hud-overlay">
-    <div class="hud-title">MEMORY SPACE</div>
-    <div class="hud-stat">NODES: {memories.length}</div>
-    <div class="hud-hint">Drag nodes to synthesize &bull; Scroll to zoom &bull; Drag to orbit</div>
+    <div class="hud-header">
+      <div class="hud-title">{mode === 'swarm' ? 'SWARM SPACE' : 'MEMORY SPACE'}</div>
+      <button class="mode-toggle" on:click={toggleMode}>
+        {mode === 'swarm' ? '🧠' : '🐝'}
+      </button>
+    </div>
+    {#if mode === 'swarm'}
+      <div class="hud-stat">STATUS: {$swarm.active ? 'ACTIVE' : 'IDLE'}</div>
+      <div class="hud-stat">WAVE: {$swarm.currentWave}</div>
+    {:else}
+      <div class="hud-stat">NODES: {memories.length}</div>
+    {/if}
+    <div class="hud-hint">
+      {mode === 'swarm'
+        ? 'Watch agents process in real-time'
+        : 'Drag nodes to synthesize'} &bull; Scroll to zoom &bull; Drag to orbit
+    </div>
   </div>
 </div>
 
@@ -60,6 +87,12 @@
     left: 1rem;
     pointer-events: none;
     z-index: 10;
+  }
+
+  .hud-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
   }
 
   .hud-title {
@@ -91,5 +124,21 @@
     color: rgba(255, 255, 255, 0.4);
     text-transform: uppercase;
     letter-spacing: 0.1em;
+  }
+
+  .mode-toggle {
+    background: rgba(0, 255, 65, 0.2);
+    border: 1px solid #00ff41;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    font-size: 1rem;
+    pointer-events: auto;
+    transition: all 0.2s;
+  }
+
+  .mode-toggle:hover {
+    background: #00ff41;
+    transform: scale(1.1);
   }
 </style>

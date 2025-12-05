@@ -2,7 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import { panels, type PanelMode } from '$lib/stores/panels';
 
-	export let panelId: 'memory3d' | 'chat' | 'artifacts' | 'analytics';
+	export let panelId: 'memory3d' | 'chat' | 'artifacts' | 'analytics' | 'swarm';
 	export let title: string;
 	export let icon: string = '◻';
 

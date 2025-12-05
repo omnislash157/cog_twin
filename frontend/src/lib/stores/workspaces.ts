@@ -59,6 +59,15 @@ function getDefaultLayout(): PanelsState {
 			zIndex: 100,
 			minimized: false
 		},
+		swarm: {
+			mode: 'docked',
+			x: 250,
+			y: 50,
+			width: 600,
+			height: 500,
+			zIndex: 100,
+			minimized: false
+		},
 		focusedPanel: null,
 		zCounter: 100
 	};

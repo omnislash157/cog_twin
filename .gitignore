@@ -71,3 +71,6 @@ chat_exports/
 *_export_*.json
 node_modules/
 .svelte-kit/
+
+# Agent sandbox (disposable test output)
+agents/sandbox/

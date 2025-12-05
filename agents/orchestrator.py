@@ -15,6 +15,40 @@ KNOWN_PACKAGES = {
     'websockets', 'pyyaml', 'scipy', 'sklearn', 'hdbscan', 'river',
 }
 
+# Directories to skip when reading project files
+SKIP_DIRS = {'node_modules', '__pycache__', '.git', '.venv', 'venv', '.svelte-kit'}
+
+
+def read_project_files(project_root: Path, patterns: List[str] = None) -> Dict[str, str]:
+    """Read existing project files for context."""
+    if patterns is None:
+        patterns = ["*.py"]
+
+    files = {}
+    for pattern in patterns:
+        for filepath in project_root.rglob(pattern):
+            # Skip unwanted directories
+            if any(skip in filepath.parts for skip in SKIP_DIRS):
+                continue
+            try:
+                rel_path = str(filepath.relative_to(project_root))
+                content = filepath.read_text(encoding='utf-8')
+                files[rel_path] = content
+            except Exception:
+                pass
+    return files
+
+
+def format_file_context(files: Dict[str, str], max_chars_per_file: int = 2000) -> str:
+    """Format files for context injection, truncating large files."""
+    sections = []
+    for path, content in sorted(files.items()):
+        truncated = content[:max_chars_per_file]
+        if len(content) > max_chars_per_file:
+            truncated += f"\n... [truncated, {len(content)} total chars]"
+        sections.append(f"=== {path} ===\n{truncated}")
+    return "\n\n".join(sections)
+
 
 @dataclass
 class WaveResult:
@@ -77,6 +111,12 @@ async def run_wave(
     print(f"WAVE {wave_number}: {task[:50]}...")
     print('='*60)
 
+    # Read existing project files for context
+    print("\n[FILES] Reading project files...")
+    existing_files = read_project_files(project_root)
+    file_context = format_file_context(existing_files)
+    print(f"[FILES] Read {len(existing_files)} files")
+
     # Context from previous waves
     context = f"""PROJECT GOAL: {project.goal}
 
@@ -86,11 +126,11 @@ PREVIOUS WAVES: {len(project.waves)}
 CURRENT CODEBASE FILES: {list(project.codebase_state.keys())}
 """
 
-    # 1. CONFIG AGENT
+    # 1. CONFIG AGENT - now with file context
     print("\n[CONFIG] Analyzing dependencies and structure...")
     config_output = await spawn_agent(
         AgentRole.CONFIG,
-        f"Task: {task}\n\nProject root: {project_root}",
+        f"Task: {task}\n\nEXISTING FILES:\n{file_context}",
         context
     )
     print(f"[CONFIG] Done. Output length: {len(config_output)}")
@@ -119,11 +159,11 @@ CURRENT CODEBASE FILES: {list(project.codebase_state.keys())}
                         human_reason=f"New packages needed: {unknown_packages}. Review CONFIG output."
                     )
 
-    # 2. EXECUTOR AGENT
+    # 2. EXECUTOR AGENT - pass file context so it can apply surgical changes
     print("\n[EXECUTOR] Writing code...")
     executor_output = await spawn_agent(
         AgentRole.EXECUTOR,
-        f"Implement based on this scaffold:\n\n{config_output}",
+        f"Apply these changes to the existing files:\n\nCONFIG INSTRUCTIONS:\n{config_output}\n\nEXISTING FILES:\n{file_context}",
         context
     )
     print(f"[EXECUTOR] Done. Output length: {len(executor_output)}")

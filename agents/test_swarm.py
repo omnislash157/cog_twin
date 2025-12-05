@@ -15,20 +15,22 @@ from agents.orchestrator import run_project
 
 
 async def main():
-    # Real test: add endpoint to our actual backend
+    # Test on sandbox - safe to trash
+    sandbox_root = Path(__file__).parent / "sandbox"
+
     project = await run_project(
-        goal="Add /api/metrics endpoint to CogTwin backend",
+        goal="Add /api/metrics endpoint to sandbox API",
         tasks=[
-            """Add a GET /api/metrics endpoint to backend/app/main.py that returns:
+            """Add a GET /api/metrics endpoint to app/main.py that returns:
             - total_queries: int (from engine.state.total_queries if available, else 0)
             - total_tokens: int (from engine.state.total_tokens_used if available, else 0)
             - uptime_seconds: float (time since startup)
             - memory_nodes: int (from engine.memory_count if available, else 0)
 
-            Follow existing endpoint patterns in the file. Use FastAPI's @router.get decorator.
+            Follow existing endpoint patterns in the file.
             Handle cases where engine might not have these attributes yet."""
         ],
-        project_root=Path(__file__).parent.parent / "backend",  # Actual backend
+        project_root=sandbox_root,
     )
 
     print("\n" + "="*60)

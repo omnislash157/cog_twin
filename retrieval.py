@@ -39,6 +39,9 @@ from schemas import (
 )
 from embedder import AsyncEmbedder
 from heuristic_enricher import HeuristicEnricher
+from cluster_schema import ClusterSchemaEngine, ClusterProfile
+from memory_grep import MemoryGrep, GrepResult
+from hybrid_search import HybridSearch, HybridResult, create_hybrid_search
 
 # Optional FAISS
 try:
@@ -90,8 +93,9 @@ class ProcessMemoryRetriever:
             centroid = centroid / (np.linalg.norm(centroid) + 1e-8)
             self.cluster_centroids[cluster_id] = centroid
 
-        # Build index mapping for non-noise nodes
-        self.valid_indices = [i for i, n in enumerate(nodes) if n.cluster_id != -1]
+        # Build index mapping - include ALL nodes (noise can still be relevant!)
+        # The ADHD scatter-brain approach: don't filter, let relevance score decide
+        self.valid_indices = list(range(len(nodes)))
 
         logger.info(f"ProcessMemoryRetriever: {len(self.valid_indices)} valid nodes, "
                     f"{len(self.cluster_centroids)} clusters")
@@ -367,6 +371,9 @@ class DualRetriever:
         process_retriever: ProcessMemoryRetriever,
         episodic_retriever: EpisodicMemoryRetriever,
         embedder: AsyncEmbedder,
+        cluster_schema: Optional[ClusterSchemaEngine] = None,
+        grep_engine: Optional[MemoryGrep] = None,
+        hybrid_search: Optional[HybridSearch] = None,
     ):
         """
         Initialize dual retriever.
@@ -375,15 +382,24 @@ class DualRetriever:
             process_retriever: Memory node retriever
             episodic_retriever: Episode retriever
             embedder: Async embedder for query embedding
+            cluster_schema: Optional cluster schema for navigation
+            grep_engine: Optional grep engine for exact keyword search
+            hybrid_search: Optional hybrid search engine (semantic + keyword)
         """
         self.process = process_retriever
         self.episodic = episodic_retriever
         self.embedder = embedder
+        self.cluster_schema = cluster_schema
+        self.enricher = HeuristicEnricher()
+        self.grep = grep_engine
+        self.hybrid = hybrid_search
 
     @classmethod
     def load(cls, data_dir: Path, manifest_file: Optional[str] = None) -> "DualRetriever":
         """
         Load retriever from saved data.
+
+        Supports both unified (v2.0) and legacy (v1.x) directory structures.
 
         Args:
             data_dir: Directory containing saved data
@@ -394,7 +410,12 @@ class DualRetriever:
         """
         data_dir = Path(data_dir)
 
-        # Find manifest
+        # Check for unified manifest first (v2.0)
+        unified_manifest = data_dir / "manifest.json"
+        if unified_manifest.exists():
+            return cls._load_unified(data_dir)
+
+        # Fall back to legacy manifest
         if manifest_file:
             manifest_path = data_dir / manifest_file
         else:
@@ -403,8 +424,103 @@ class DualRetriever:
                 raise FileNotFoundError(f"No manifest found in {data_dir}")
             manifest_path = max(manifests, key=lambda p: p.stat().st_mtime)
 
-        logger.info(f"Loading from manifest: {manifest_path}")
+        logger.info(f"Loading from legacy manifest: {manifest_path}")
+        return cls._load_legacy(data_dir, manifest_path)
 
+    @classmethod
+    def _load_unified(cls, data_dir: Path) -> "DualRetriever":
+        """Load from unified corpus structure (v2.0)."""
+        manifest_path = data_dir / "manifest.json"
+        logger.info(f"Loading from unified manifest: {manifest_path}")
+
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        # Load memory nodes from corpus/
+        nodes_file = data_dir / "corpus" / "nodes.json"
+        with open(nodes_file) as f:
+            nodes_data = json.load(f)
+        nodes = [MemoryNode.from_dict(d) for d in nodes_data]
+        logger.info(f"Loaded {len(nodes)} nodes from unified corpus")
+
+        # Load episodes from corpus/
+        episodes_file = data_dir / "corpus" / "episodes.json"
+        with open(episodes_file) as f:
+            episodes_data = json.load(f)
+        episodes = [EpisodicMemory.from_dict(d) for d in episodes_data]
+        logger.info(f"Loaded {len(episodes)} episodes from unified corpus")
+
+        # Load embeddings from vectors/
+        node_emb_file = data_dir / "vectors" / "nodes.npy"
+        node_embeddings = np.load(node_emb_file)
+        logger.info(f"Loaded node embeddings: {node_embeddings.shape}")
+
+        episode_emb_file = data_dir / "vectors" / "episodes.npy"
+        episode_embeddings = np.load(episode_emb_file)
+        logger.info(f"Loaded episode embeddings: {episode_embeddings.shape}")
+
+        # Load cluster info from indexes/
+        clusters_file = data_dir / "indexes" / "clusters.json"
+        with open(clusters_file) as f:
+            cluster_info = json.load(f)
+        cluster_info = {int(k): v for k, v in cluster_info.items()}
+
+        # Assign cluster_id to each node based on cluster_info
+        for cluster_id, node_indices in cluster_info.items():
+            for idx in node_indices:
+                if idx < len(nodes):
+                    nodes[idx].cluster_id = cluster_id
+
+        # Load FAISS index if available
+        faiss_index = None
+        faiss_file = data_dir / "indexes" / "faiss.index"
+        if faiss_file.exists() and FAISS_AVAILABLE:
+            faiss_index = faiss.read_index(str(faiss_file))
+            logger.info(f"Loaded FAISS index: {faiss_index.ntotal} vectors")
+
+        # Build retrievers
+        process_retriever = ProcessMemoryRetriever(nodes, node_embeddings, cluster_info)
+        episodic_retriever = EpisodicMemoryRetriever(episodes, episode_embeddings, faiss_index)
+
+        # Build embedder
+        embedder = AsyncEmbedder(cache_dir=data_dir / "embedding_cache")
+
+        # Load cluster schema if available
+        cluster_schema = None
+        schema_file = data_dir / "indexes" / "cluster_schema.json"
+        if schema_file.exists():
+            try:
+                cluster_schema = ClusterSchemaEngine(data_dir)
+                cluster_schema.load_schema()
+                cluster_schema.centroids = process_retriever.cluster_centroids
+                logger.info(f"Loaded cluster schema with {len(cluster_schema.profiles)} profiles")
+            except Exception as e:
+                logger.warning(f"Failed to load cluster schema: {e}")
+
+        # Build grep engine for exact keyword search
+        grep_engine = MemoryGrep(nodes)
+        logger.info(f"MemoryGrep: indexed {len(nodes)} nodes, {len(grep_engine.inverted_index)} unique terms")
+
+        # Build hybrid search engine (semantic + keyword)
+        # Uses FAISS index for semantic search, BM25 for keyword
+        hybrid_engine = None
+        if faiss_index is not None:
+            hybrid_engine = create_hybrid_search(
+                nodes=nodes,
+                embeddings=node_embeddings,
+                faiss_index=faiss_index,
+                embedder=embedder,
+                grep=grep_engine,
+            )
+            logger.info("HybridSearch: semantic + keyword search enabled")
+        else:
+            logger.warning("HybridSearch: FAISS not available, falling back to BM25 only")
+
+        return cls(process_retriever, episodic_retriever, embedder, cluster_schema, grep_engine, hybrid_engine)
+
+    @classmethod
+    def _load_legacy(cls, data_dir: Path, manifest_path: Path) -> "DualRetriever":
+        """Load from legacy timestamped structure (v1.x)."""
         with open(manifest_path) as f:
             manifest = json.load(f)
 
@@ -433,6 +549,12 @@ class DualRetriever:
             cluster_info = json.load(f)
         cluster_info = {int(k): v for k, v in cluster_info.items()}
 
+        # Assign cluster_id to each node based on cluster_info
+        for cluster_id, node_indices in cluster_info.items():
+            for idx in node_indices:
+                if idx < len(nodes):
+                    nodes[idx].cluster_id = cluster_id
+
         # Load FAISS index if available
         faiss_index = None
         if manifest.get("faiss_index_file") and FAISS_AVAILABLE:
@@ -447,15 +569,46 @@ class DualRetriever:
         # Build embedder
         embedder = AsyncEmbedder(cache_dir=data_dir / "embedding_cache")
 
-        return cls(process_retriever, episodic_retriever, embedder)
+        # Load cluster schema if available
+        cluster_schema = None
+        schema_file = data_dir / "indexes" / "cluster_schema.json"
+        if schema_file.exists():
+            try:
+                cluster_schema = ClusterSchemaEngine(data_dir)
+                cluster_schema.load_schema()
+                # Attach centroids from process retriever
+                cluster_schema.centroids = process_retriever.cluster_centroids
+                logger.info(f"Loaded cluster schema with {len(cluster_schema.profiles)} profiles")
+            except Exception as e:
+                logger.warning(f"Failed to load cluster schema: {e}")
+
+        # Build grep engine for exact keyword search
+        grep_engine = MemoryGrep(nodes)
+        logger.info(f"MemoryGrep: indexed {len(nodes)} nodes, {len(grep_engine.inverted_index)} unique terms")
+
+        # Build hybrid search engine (semantic + keyword)
+        hybrid_engine = None
+        if faiss_index is not None:
+            hybrid_engine = create_hybrid_search(
+                nodes=nodes,
+                embeddings=node_embeddings,
+                faiss_index=faiss_index,
+                embedder=embedder,
+                grep=grep_engine,
+            )
+            logger.info("HybridSearch: semantic + keyword search enabled")
+        else:
+            logger.warning("HybridSearch: FAISS not available, falling back to BM25 only")
+
+        return cls(process_retriever, episodic_retriever, embedder, cluster_schema, grep_engine, hybrid_engine)
 
     async def retrieve(
         self,
         query: str,
-        process_top_k: int = 5,
-        episodic_top_k: int = 3,
-        process_threshold: float = 0.5,
-        episodic_threshold: float = 0.3,
+        process_top_k: int = 50,  # High limit, let threshold do the work
+        episodic_top_k: int = 20,  # High limit, let threshold do the work
+        process_threshold: float = 0.5,  # Relevance threshold - scatter brain friendly
+        episodic_threshold: float = 0.5,  # Relevance threshold
     ) -> RetrievalResult:
         """
         Retrieve from both memory systems.
@@ -558,6 +711,162 @@ class DualRetriever:
 
         result.build_venom_context()
         return result
+
+    # =========================================================================
+    # GREP - Exact keyword search
+    # =========================================================================
+
+    def keyword_search(self, term: str, **kwargs) -> GrepResult:
+        """
+        Exact keyword search with frequency analysis.
+
+        Args:
+            term: Search term
+            **kwargs: Passed to MemoryGrep.grep() (exact, context_chars, max_hits)
+
+        Returns:
+            GrepResult with hits, frequencies, temporal distribution
+        """
+        if not self.grep:
+            return GrepResult(
+                term=term,
+                total_occurrences=0,
+                unique_memories=0,
+                hits=[],
+                temporal_distribution={},
+                co_occurring_terms=[],
+            )
+        return self.grep.grep(term, **kwargs)
+
+    def keyword_frequency_report(self, term: str) -> dict:
+        """Get full frequency analysis for a term."""
+        if not self.grep:
+            return {"term": term, "error": "Grep engine not initialized"}
+        return self.grep.frequency_report(term)
+
+    def keyword_bm25_search(self, query: str, top_k: int = 20) -> list:
+        """BM25 ranked search across all memories."""
+        if not self.grep:
+            return []
+        return self.grep.bm25_search(query, top_k)
+
+    # =========================================================================
+    # CLUSTER NAVIGATION (for API model)
+    # =========================================================================
+
+    def get_cluster_map(self, top_n: int = 30) -> str:
+        """
+        Get a text map of top clusters for LLM context.
+
+        Returns markdown-formatted cluster overview.
+        """
+        if not self.cluster_schema:
+            return "Cluster schema not loaded."
+        return self.cluster_schema.get_cluster_map(top_n)
+
+    async def find_relevant_clusters(
+        self,
+        query: str,
+        top_k: int = 5,
+        threshold: float = 0.3,
+    ) -> List[Tuple[int, float, ClusterProfile]]:
+        """
+        Find clusters relevant to a query.
+
+        Returns list of (cluster_id, similarity, profile) tuples.
+        """
+        if not self.cluster_schema:
+            return []
+
+        query_embedding = await self.embedder.embed_single(query)
+        return self.cluster_schema.find_clusters_by_query(
+            query_embedding, top_k=top_k, threshold=threshold
+        )
+
+    def find_clusters_by_domain(
+        self, domain: str, min_percentage: float = 0.3
+    ) -> List[ClusterProfile]:
+        """Find clusters dominated by a specific domain."""
+        if not self.cluster_schema:
+            return []
+        return self.cluster_schema.find_clusters_by_domain(domain, min_percentage)
+
+    def find_clusters_by_keyword(self, keyword: str) -> List[ClusterProfile]:
+        """Find clusters containing a keyword."""
+        if not self.cluster_schema:
+            return []
+        return self.cluster_schema.find_clusters_by_keyword(keyword)
+
+    async def retrieve_from_clusters(
+        self,
+        query: str,
+        cluster_ids: List[int],
+        top_k_per_cluster: int = 5,
+    ) -> RetrievalResult:
+        """
+        Retrieve from specific clusters only.
+
+        Useful when the API model wants to explore a specific area.
+        """
+        import time
+        start = time.time()
+
+        query_embedding = await self.embedder.embed_single(query)
+
+        # Get nodes from specified clusters
+        all_results = []
+        all_scores = []
+
+        for cluster_id in cluster_ids:
+            if cluster_id not in self.process.cluster_info:
+                continue
+
+            indices = self.process.cluster_info[cluster_id]
+            cluster_embeddings = self.process.normalized[indices]
+
+            # Compute similarities
+            query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
+            sims = cluster_embeddings @ query_norm
+
+            # Get top from this cluster
+            sorted_local = np.argsort(sims)[::-1][:top_k_per_cluster]
+
+            for local_idx in sorted_local:
+                global_idx = indices[local_idx]
+                all_results.append(self.process.nodes[global_idx])
+                all_scores.append(float(sims[local_idx]))
+
+        # Sort all results by score
+        if all_results:
+            sorted_pairs = sorted(zip(all_results, all_scores),
+                                  key=lambda x: x[1], reverse=True)
+            all_results, all_scores = zip(*sorted_pairs)
+            all_results = list(all_results)
+            all_scores = list(all_scores)
+
+        elapsed = (time.time() - start) * 1000
+
+        result = RetrievalResult(
+            query=query,
+            process_memories=all_results,
+            process_scores=all_scores,
+            episodic_memories=[],
+            episodic_scores=[],
+            retrieval_time_ms=elapsed,
+            process_candidates_scanned=sum(
+                len(self.process.cluster_info.get(cid, []))
+                for cid in cluster_ids
+            ),
+        )
+
+        result.build_venom_context()
+        return result
+
+    def get_cluster_profile(self, cluster_id: int) -> Optional[ClusterProfile]:
+        """Get the semantic profile for a specific cluster."""
+        if not self.cluster_schema:
+            return None
+        return self.cluster_schema.profiles.get(cluster_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

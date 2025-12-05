@@ -381,49 +381,62 @@ class GrokParser(BaseParser):
     """
     Parser for Grok (X/Twitter AI) exports.
     
-    Export format: Grok conversation history from X data export
+    Export format: prod-grok-backend.json from X data export
     Get it: X.com -> Settings -> Your Account -> Download Archive
     
-    Structure varies - Grok data may be in:
-    - grok-conversations.json
-    - Or embedded in Twitter archive
+    Structure:
+    {
+      "conversations": [
+        {
+          "conversation": {"id": "...", "title": "...", "create_time": "..."},
+          "responses": [
+            {"response": {"_id": "...", "message": "...", "sender": "human|assistant", 
+                          "create_time": {"$date": {"$numberLong": "..."}}}}
+          ]
+        }
+      ]
+    }
     """
     
     PROVIDER = "grok"
     
     def can_parse(self, data: Any) -> bool:
-        """Grok exports typically have 'grok' markers or X-specific fields."""
-        if not isinstance(data, list) or not data:
-            return False
-        first = data[0]
-        # Grok conversations have 'conversationId' and 'messages' with 'grokResponse'
-        return (
-            isinstance(first, dict) and 
-            ('conversationId' in first or 'grok' in str(first).lower())
-        )
+        """Detect Grok export format."""
+        if isinstance(data, dict):
+            convs = data.get('conversations', [])
+            if convs and isinstance(convs, list) and len(convs) > 0:
+                first = convs[0]
+                # New format: {"conversation": {...}, "responses": [...]}
+                if isinstance(first, dict) and 'conversation' in first and 'responses' in first:
+                    return True
+        # Legacy format fallback
+        if isinstance(data, list) and data:
+            first = data[0]
+            return isinstance(first, dict) and ('conversationId' in first or 'grok' in str(first).lower())
+        return False
     
     def parse_file(self, filepath: str) -> List[Dict[str, Any]]:
         """Parse Grok conversation export."""
         filepath = Path(filepath)
         
-        # Handle ZIP archives (Twitter data export)
         if filepath.suffix == '.zip':
             return self._parse_from_zip(filepath)
         
         with open(filepath, 'r', encoding='utf-8') as f:
             raw = json.load(f)
         
-        # Handle both array and object formats
-        if isinstance(raw, dict):
-            raw = raw.get('conversations', [raw])
+        # New format: {"conversations": [{...}, ...]}
+        if isinstance(raw, dict) and 'conversations' in raw:
+            conversations = raw['conversations']
+        elif isinstance(raw, list):
+            conversations = raw
+        else:
+            raise ValueError("Expected object with 'conversations' or array")
         
-        if not isinstance(raw, list):
-            raise ValueError("Expected list or object with conversations")
-        
-        self.stats['total_conversations'] = len(raw)
+        self.stats['total_conversations'] = len(conversations)
         normalized = []
         
-        for conv in raw:
+        for conv in conversations:
             try:
                 result = self._normalize(conv)
                 if result:
@@ -438,7 +451,6 @@ class GrokParser(BaseParser):
         normalized = []
         
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            # Look for Grok-related files
             grok_files = [
                 n for n in zf.namelist() 
                 if 'grok' in n.lower() and n.endswith('.json')
@@ -447,7 +459,12 @@ class GrokParser(BaseParser):
             for filename in grok_files:
                 with zf.open(filename) as f:
                     data = json.load(f)
-                    if isinstance(data, list):
+                    if isinstance(data, dict) and 'conversations' in data:
+                        for conv in data['conversations']:
+                            result = self._normalize(conv)
+                            if result:
+                                normalized.append(result)
+                    elif isinstance(data, list):
                         for conv in data:
                             result = self._normalize(conv)
                             if result:
@@ -456,17 +473,84 @@ class GrokParser(BaseParser):
         self.stats['total_conversations'] = len(normalized)
         return normalized
     
+    def _parse_mongo_timestamp(self, ts: Any) -> str:
+        """Parse MongoDB-style timestamp: {"$date": {"$numberLong": "1764586228275"}}"""
+        if not ts:
+            return ""
+        if isinstance(ts, str):
+            return ts
+        if isinstance(ts, dict):
+            date_obj = ts.get('$date', {})
+            if isinstance(date_obj, dict):
+                ms = date_obj.get('$numberLong', '')
+                if ms:
+                    try:
+                        return datetime.fromtimestamp(int(ms) / 1000).isoformat()
+                    except (ValueError, OSError):
+                        return ""
+            elif isinstance(date_obj, (int, float)):
+                try:
+                    return datetime.fromtimestamp(date_obj / 1000).isoformat()
+                except (ValueError, OSError):
+                    return ""
+        return self._safe_timestamp(ts)
+    
     def _normalize(self, conv: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Normalize Grok conversation."""
-        messages = conv.get('messages', [])
+        # New format: {"conversation": {...}, "responses": [...]}
+        if 'conversation' in conv and 'responses' in conv:
+            meta = conv['conversation']
+            responses = conv['responses']
+            
+            messages = []
+            for r in responses:
+                resp = r.get('response', r)
+                msg_content = resp.get('message', '')
+                if not msg_content:
+                    continue
+                messages.append({
+                    'id': resp.get('_id', resp.get('id', '')),
+                    'role': 'human' if resp.get('sender') == 'human' else 'assistant',
+                    'content': msg_content,
+                    'created_at': self._parse_mongo_timestamp(resp.get('create_time'))
+                })
+            
+            if not messages:
+                self.stats['empty_conversations'] += 1
+                return None
+            
+            self.stats['total_messages'] += len(messages)
+            
+            title = meta.get('title', '')
+            if not title:
+                first_human = next((m for m in messages if m['role'] == 'human'), None)
+                if first_human:
+                    title = self._truncate(first_human['content'], 60)
+                else:
+                    title = f"Grok Chat {meta.get('id', 'unknown')[:8]}"
+            
+            return {
+                'id': meta.get('id', ''),
+                'title': title,
+                'created_at': meta.get('create_time', ''),
+                'updated_at': meta.get('modify_time', ''),
+                'messages': messages,
+                'metadata': {
+                    'source': 'grok',
+                    'message_count': len(messages),
+                    'user_id': meta.get('user_id', ''),
+                    'model': messages[-1].get('model', '') if messages else ''
+                }
+            }
         
+        # Legacy format fallback
+        messages = conv.get('messages', [])
         if not messages:
             self.stats['empty_conversations'] += 1
             return None
         
         self.stats['total_messages'] += len(messages)
         
-        # Build title from first user message
         first_user = next(
             (m for m in messages if m.get('role') == 'user' or m.get('sender') == 'user'), 
             None

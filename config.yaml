@@ -1,0 +1,96 @@
+# COG_TWIN Configuration
+# Single source of truth for all tunable parameters
+
+# =============================================================================
+# MODEL SETTINGS
+# =============================================================================
+model:
+  provider: xai           # xai (Grok) or anthropic (Claude)
+  name: grok-4-fast-reasoning
+  max_tokens: 8192        # Can increase with 2M context
+  temperature: 0.7
+
+# =============================================================================
+# RETRIEVAL MODE
+# =============================================================================
+retrieval_mode: "tools"  # options: "tools" or "inject"
+
+# =============================================================================
+# RETRIEVAL
+# =============================================================================
+retrieval:
+  process_top_k: 10      # Process memories to retrieve
+  episodic_top_k: 5      # Episodic memories to retrieve
+  session_top_k: 5       # Session memories to search
+  min_score: 0.3         # Minimum similarity threshold
+
+# =============================================================================
+# MEMORY PIPELINE (Recursive Loop)
+# =============================================================================
+memory_pipeline:
+  batch_interval: 5.0    # Seconds between batch processing
+  max_batch_size: 10     # Process when queue hits this size
+
+# =============================================================================
+# COGNITIVE SYSTEM
+# =============================================================================
+cognitive:
+  gap_threshold: 0.3     # Minimum gap severity to report
+  max_chain_depth: 3     # Max exploration depth for chained queries
+  query_window_size: 100 # Mirror query history window
+  cluster_epsilon: 0.3   # Semantic clustering threshold
+
+# =============================================================================
+# STREAMING CLUSTER
+# =============================================================================
+clustering:
+  novelty_threshold: 0.7    # Above this = new cluster candidate
+  min_cluster_size: 3       # Minimum points for valid cluster
+  merge_threshold: 0.85     # Similarity to merge clusters
+
+# =============================================================================
+# PATHS (relative to project root)
+# =============================================================================
+paths:
+  data_dir: ./data
+  profiles_dir: ./data/user_profiles
+  patches_dir: ./patches
+  embedding_cache: ./data/embedding_cache
+
+# =============================================================================
+# EVOLUTION ENGINE (Self-Modification)
+# =============================================================================
+evolution:
+  auto_approve_low_risk: false  # NEVER enable in production
+
+# =============================================================================
+# TRAINING MODE (Phase 3 Scoring)
+# =============================================================================
+training:
+  enabled: true           # Prompt for score after each response
+  quick_mode: true        # Quick 1-5 rating only (vs full multi-field)
+  prompt_every: 1         # Future: prompt after every N responses
+
+# =============================================================================
+# FEEDBACK INJECTION (Phase 4 Learning Loop)
+# =============================================================================
+feedback_injection:
+  enabled: true           # Inject high-scored traces into prompts
+  exemplar_top_k: 3       # Max exemplar traces to inject
+  exemplar_min_score: 0.7 # Minimum overall score to qualify as exemplar
+  include_negative_examples: false  # Future: show what NOT to do
+
+# =============================================================================
+# TRACE INTEGRATION (Phase 5 - Closes the Learning Loop)
+# =============================================================================
+trace_integration:
+  live_stream: true           # Stream traces to memory pipeline immediately
+  batch_on_startup: false     # Batch ingest traces on startup (not recommended)
+  dedup_enabled: true         # Enable deduplication checks
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+logging:
+  level: INFO
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

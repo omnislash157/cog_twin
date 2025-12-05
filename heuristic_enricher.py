@@ -380,9 +380,20 @@ class HeuristicEnricher:
         clean = re.sub(r'```.*?```', '', content_lower, flags=re.DOTALL)
         
         # Extract words 4+ chars, not stopwords
-        stopwords = {'this', 'that', 'with', 'from', 'have', 'been', 'were', 
-                     'they', 'their', 'what', 'when', 'where', 'which', 'there',
-                     'would', 'could', 'should', 'about', 'some', 'into', 'more'}
+        stopwords = {
+            # Common function words
+            'this', 'that', 'with', 'from', 'have', 'been', 'were',
+            'they', 'their', 'what', 'when', 'where', 'which', 'there',
+            'would', 'could', 'should', 'about', 'some', 'into', 'more',
+            'like', 'just', 'your', 'very', 'also', 'here', 'then',
+            'than', 'being', 'will', 'does', 'doing', 'those', 'these',
+            'such', 'much', 'only', 'other', 'each', 'both', 'after',
+            'before', 'over', 'under', 'again', 'because', 'same', 'thought',
+            # Chat-specific
+            'okay', 'sure', 'yeah', 'thing', 'things', 'something',
+            'anything', 'nothing', 'everything', 'really', 'actually',
+            'probably', 'basically', 'literally', 'definitely', 'maybe',
+        }
         
         words = re.findall(r'\b[a-z]{4,}\b', clean)
         filtered = [w for w in words if w not in stopwords]

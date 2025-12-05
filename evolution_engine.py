@@ -99,7 +99,8 @@ class EvolutionEngine:
         InsightType.PERFORMANCE: [
             "retrieval.py",
             "embedder.py",
-            "venom_agent.py",
+            "cog_twin.py",
+            "memory_pipeline.py",
         ],
         InsightType.ACCURACY: [
             "retrieval.py",
@@ -111,18 +112,20 @@ class EvolutionEngine:
             "streaming_cluster.py",
         ],
         InsightType.MEMORY_OVERFLOW: [
-            "venom_agent.py",
+            "cog_twin.py",
+            "memory_pipeline.py",
             "retrieval.py",
         ],
         InsightType.ALIGNMENT_DRIFT: [
-            "venom_agent.py",
+            "cog_twin.py",
+            "venom_voice.py",
             "cognitive_twin.py",
         ],
         InsightType.CODE_SMELL: [
             # Could be any file - will use LLM to identify
         ],
         InsightType.MISSING_CAPABILITY: [
-            "venom_agent.py",
+            "cog_twin.py",
             "retrieval.py",
         ],
     }

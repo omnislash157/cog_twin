@@ -1,0 +1,233 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Cyberpunk Base Styles */
+:root {
+	--neon-green: #00ff41;
+	--neon-cyan: #00ffff;
+	--neon-magenta: #ff00ff;
+	--neon-yellow: #ffff00;
+	--bg-primary: #0a0a0a;
+	--bg-secondary: #111111;
+	--bg-tertiary: #1a1a1a;
+	--border-dim: #222222;
+	--border-glow: rgba(0, 255, 65, 0.25);
+	--text-primary: #e0e0e0;
+	--text-muted: #808080;
+}
+
+/* Normie mode overrides */
+.normie-mode {
+	--neon-green: #2563eb;
+	--neon-cyan: #0891b2;
+	--neon-magenta: #7c3aed;
+	--bg-primary: #ffffff;
+	--bg-secondary: #f8fafc;
+	--bg-tertiary: #f1f5f9;
+	--border-dim: #e2e8f0;
+	--border-glow: rgba(37, 99, 235, 0.25);
+	--text-primary: #1e293b;
+	--text-muted: #64748b;
+}
+
+/* Global styles */
+body {
+	font-family: 'Inter', system-ui, sans-serif;
+	background: var(--bg-primary);
+	color: var(--text-primary);
+	min-height: 100vh;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--border-dim);
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--neon-green);
+}
+
+/* Glow effects */
+.glow-border {
+	border: 1px solid var(--border-dim);
+	box-shadow: 0 0 10px var(--border-glow);
+}
+
+.glow-text {
+	text-shadow: 0 0 10px var(--neon-green);
+}
+
+/* Code/mono text */
+.font-mono {
+	font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Panel styling */
+.panel {
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-dim);
+	border-radius: 8px;
+}
+
+.panel-glow {
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-glow);
+	border-radius: 8px;
+	box-shadow: 0 0 20px var(--border-glow);
+}
+
+/* Input styling */
+input, textarea {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-dim);
+	color: var(--text-primary);
+	border-radius: 6px;
+	padding: 0.5rem 1rem;
+	outline: none;
+	transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input:focus, textarea:focus {
+	border-color: var(--neon-green);
+	box-shadow: 0 0 10px var(--border-glow);
+}
+
+/* Button styling */
+.btn {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-dim);
+	color: var(--text-primary);
+	padding: 0.5rem 1rem;
+	border-radius: 6px;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.btn:hover {
+	border-color: var(--neon-green);
+	box-shadow: 0 0 10px var(--border-glow);
+}
+
+.btn-primary {
+	background: var(--neon-green);
+	color: var(--bg-primary);
+	border-color: var(--neon-green);
+}
+
+.btn-primary:hover {
+	box-shadow: 0 0 20px var(--neon-green);
+}
+
+/* Animation utilities */
+@keyframes fade-in {
+	from { opacity: 0; transform: translateY(10px); }
+	to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+	animation: fade-in 0.3s ease-out;
+}
+
+/* Markdown rendering in chat messages */
+.message-content h1 {
+	font-size: 1.25rem;
+	font-weight: 700;
+	margin: 0.75rem 0;
+	color: var(--neon-green);
+}
+
+.message-content h2 {
+	font-size: 1.15rem;
+	font-weight: 600;
+	margin: 0.65rem 0;
+	color: var(--neon-cyan);
+}
+
+.message-content h3 {
+	font-size: 1.1rem;
+	font-weight: 600;
+	margin: 0.5rem 0;
+}
+
+.message-content strong {
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.message-content em {
+	font-style: italic;
+	color: var(--text-muted);
+}
+
+.message-content ul,
+.message-content ol {
+	margin: 0.5rem 0 0.5rem 1.5rem;
+	padding-left: 0.5rem;
+}
+
+.message-content li {
+	margin: 0.25rem 0;
+}
+
+.message-content code {
+	background: rgba(0, 255, 65, 0.1);
+	padding: 0.1rem 0.3rem;
+	border-radius: 3px;
+	font-family: 'JetBrains Mono', 'Fira Code', monospace;
+	font-size: 0.9em;
+	color: var(--neon-green);
+}
+
+.message-content pre {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-dim);
+	border-radius: 6px;
+	padding: 0.75rem;
+	margin: 0.5rem 0;
+	overflow-x: auto;
+}
+
+.message-content pre code {
+	background: transparent;
+	padding: 0;
+	color: var(--text-primary);
+}
+
+.message-content p {
+	margin: 0.5rem 0;
+	line-height: 1.6;
+}
+
+.message-content a {
+	color: var(--neon-cyan);
+	text-decoration: underline;
+}
+
+.message-content a:hover {
+	color: var(--neon-green);
+}
+
+.message-content blockquote {
+	border-left: 3px solid var(--neon-green);
+	padding-left: 1rem;
+	margin: 0.5rem 0;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.message-content hr {
+	border: none;
+	border-top: 1px solid var(--border-dim);
+	margin: 1rem 0;
+}

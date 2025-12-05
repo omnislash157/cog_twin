@@ -1,21 +1,43 @@
 """
-Ingest Pipeline - Raw Chat Exports to Dual Memory Store
+Ingest Pipeline - Raw Chat Exports to Dual Memory Store (Unified/Incremental)
 
 The main orchestrator that takes raw JSON exports and produces:
 1. Memory Nodes: 1:1 Q/A pairs → clustered → NumPy vectors
 2. Episodic Memories: Full conversations → FAISS index → LLM tagged
 
-Pipeline:
-    Raw JSON → Parse → Split → Enrich → Embed → Cluster/Index → Store
+Pipeline (Incremental):
+    Raw JSON → Parse → DEDUP CHECK → Embed ONLY NEW → Merge → Re-cluster → Store
+
+Key Features:
+- Dedup BEFORE embedding (saves API costs)
+- Incremental merge with existing corpus
+- Single unified output files (no timestamps)
+- Full re-cluster on merged corpus
+
+File Structure (unified):
+    data/
+    ├── corpus/
+    │   ├── nodes.json           # Single unified nodes file
+    │   ├── episodes.json        # Single unified episodes file
+    │   └── dedup_index.json     # Content hashes for dedup
+    ├── vectors/
+    │   ├── nodes.npy            # Single embeddings array
+    │   └── episodes.npy         # Single episode embeddings
+    ├── indexes/
+    │   ├── faiss.index          # Single FAISS index
+    │   └── clusters.json        # Cluster assignments
+    └── manifest.json            # Single manifest
 
 Usage:
     python ingest.py ./chat_exports/anthropic/conversations.json
     python ingest.py ./chat_exports/ --recursive
+    python ingest.py ./data --traces   # Ingest reasoning traces (Phase 5)
 
-Version: 1.0.0 (cog_twin)
+Version: 2.0.0 (cog_twin - Unified incremental ingestion)
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -23,7 +45,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 
 import numpy as np
 
@@ -56,12 +78,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def compute_content_hash(content: str) -> str:
+    """Compute SHA256 hash for content-based dedup."""
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
 class IngestPipeline:
     """
     Main ingest pipeline for processing chat exports into memory stores.
 
     Handles both memory node extraction (for process memory) and
     episodic memory preservation (for context memory).
+
+    Version 2.0: Unified incremental ingestion with dedup-before-embedding.
     """
 
     def __init__(
@@ -80,29 +109,41 @@ class IngestPipeline:
             embedding_batch_size: Batch size for embedding API calls
             embedding_concurrency: Max concurrent embedding requests
         """
-        self.output_dir = output_dir
+        self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Sub-directories
-        self.nodes_dir = output_dir / "memory_nodes"
-        self.episodes_dir = output_dir / "episodic_memories"
-        self.vectors_dir = output_dir / "vectors"
-        self.index_dir = output_dir / "indexes"
+        # Unified directory structure
+        self.corpus_dir = self.output_dir / "corpus"
+        self.vectors_dir = self.output_dir / "vectors"
+        self.index_dir = self.output_dir / "indexes"
 
-        for d in [self.nodes_dir, self.episodes_dir, self.vectors_dir, self.index_dir]:
+        for d in [self.corpus_dir, self.vectors_dir, self.index_dir]:
             d.mkdir(parents=True, exist_ok=True)
+
+        # Legacy directories (for backward compatibility during migration)
+        self.nodes_dir = self.output_dir / "memory_nodes"
+        self.episodes_dir = self.output_dir / "episodic_memories"
 
         # Components
         self.parser = ChatParserFactory()
         self.enricher = HeuristicEnricher()
         self.embedder = AsyncEmbedder(
             api_key=deepinfra_api_key,
-            cache_dir=output_dir / "embedding_cache",
+            cache_dir=self.output_dir / "embedding_cache",
         )
 
         # Config
         self.embedding_batch_size = embedding_batch_size
         self.embedding_concurrency = embedding_concurrency
+
+        # Load existing corpus if present (for incremental merge)
+        self.existing_nodes: List[MemoryNode] = []
+        self.existing_episodes: List[EpisodicMemory] = []
+        self.existing_node_embeddings: Optional[np.ndarray] = None
+        self.existing_episode_embeddings: Optional[np.ndarray] = None
+        self.dedup_index: Set[str] = set()
+
+        self._load_existing_corpus()
 
         # Stats
         self.stats = {
@@ -112,8 +153,115 @@ class IngestPipeline:
             "episodes_created": 0,
             "nodes_clustered": 0,
             "noise_nodes_filtered": 0,
+            "duplicates_skipped": 0,
+            "existing_nodes_loaded": len(self.existing_nodes),
+            "existing_episodes_loaded": len(self.existing_episodes),
             "total_time_seconds": 0,
         }
+
+    def _load_existing_corpus(self) -> None:
+        """Load existing unified corpus if present."""
+        # Check for unified structure first
+        nodes_file = self.corpus_dir / "nodes.json"
+        episodes_file = self.corpus_dir / "episodes.json"
+        dedup_file = self.corpus_dir / "dedup_index.json"
+        node_emb_file = self.vectors_dir / "nodes.npy"
+        episode_emb_file = self.vectors_dir / "episodes.npy"
+
+        # Load nodes
+        if nodes_file.exists():
+            try:
+                with open(nodes_file) as f:
+                    nodes_data = json.load(f)
+                self.existing_nodes = [MemoryNode.from_dict(d) for d in nodes_data]
+                logger.info(f"Loaded {len(self.existing_nodes)} existing nodes from unified corpus")
+            except Exception as e:
+                logger.warning(f"Failed to load existing nodes: {e}")
+
+        # Load episodes
+        if episodes_file.exists():
+            try:
+                with open(episodes_file) as f:
+                    episodes_data = json.load(f)
+                self.existing_episodes = [EpisodicMemory.from_dict(d) for d in episodes_data]
+                logger.info(f"Loaded {len(self.existing_episodes)} existing episodes from unified corpus")
+            except Exception as e:
+                logger.warning(f"Failed to load existing episodes: {e}")
+
+        # Load dedup index
+        if dedup_file.exists():
+            try:
+                with open(dedup_file) as f:
+                    data = json.load(f)
+                self.dedup_index = set(data.get("ingested_ids", []))
+                logger.info(f"Loaded dedup index with {len(self.dedup_index)} entries")
+            except Exception as e:
+                logger.warning(f"Failed to load dedup index: {e}")
+
+        # Load embeddings
+        if node_emb_file.exists():
+            try:
+                self.existing_node_embeddings = np.load(node_emb_file)
+                logger.info(f"Loaded existing node embeddings: {self.existing_node_embeddings.shape}")
+            except Exception as e:
+                logger.warning(f"Failed to load node embeddings: {e}")
+
+        if episode_emb_file.exists():
+            try:
+                self.existing_episode_embeddings = np.load(episode_emb_file)
+                logger.info(f"Loaded existing episode embeddings: {self.existing_episode_embeddings.shape}")
+            except Exception as e:
+                logger.warning(f"Failed to load episode embeddings: {e}")
+
+    def _filter_duplicates(self, nodes: List[MemoryNode]) -> List[MemoryNode]:
+        """
+        Filter out nodes that already exist in corpus. Check BEFORE embedding.
+
+        Args:
+            nodes: List of new nodes to check
+
+        Returns:
+            List of nodes that are NOT duplicates
+        """
+        new_nodes = []
+        duplicates = 0
+
+        for node in nodes:
+            # Check by ID
+            if node.id in self.dedup_index:
+                duplicates += 1
+                continue
+
+            # Check by content hash
+            content_hash = compute_content_hash(node.combined_content)
+            if content_hash in self.dedup_index:
+                duplicates += 1
+                continue
+
+            # Not a duplicate - add to new list and register
+            new_nodes.append(node)
+            self.dedup_index.add(node.id)
+            self.dedup_index.add(content_hash)
+
+        self.stats["duplicates_skipped"] += duplicates
+        logger.info(f"Dedup: {len(nodes)} input → {len(new_nodes)} new ({duplicates} duplicates skipped)")
+        return new_nodes
+
+    def _filter_duplicate_episodes(self, episodes: List[EpisodicMemory]) -> List[EpisodicMemory]:
+        """Filter out episodes that already exist in corpus."""
+        new_episodes = []
+        duplicates = 0
+
+        for ep in episodes:
+            if ep.id in self.dedup_index:
+                duplicates += 1
+                continue
+
+            new_episodes.append(ep)
+            self.dedup_index.add(ep.id)
+
+        logger.info(f"Episode dedup: {len(episodes)} input → {len(new_episodes)} new ({duplicates} duplicates skipped)")
+        return new_episodes
 
     def _source_from_string(self, source_str: str) -> Source:
         """Convert source string to enum."""
@@ -385,7 +533,7 @@ class IngestPipeline:
 
         return index
 
-    def save_all(
+    def _save_unified(
         self,
         nodes: List[MemoryNode],
         episodes: List[EpisodicMemory],
@@ -395,7 +543,7 @@ class IngestPipeline:
         cluster_info: Dict[int, List[int]],
     ) -> None:
         """
-        Save all data to disk.
+        Save to unified files (no timestamps, single source of truth).
 
         Args:
             nodes: Memory nodes with cluster assignments
@@ -405,61 +553,81 @@ class IngestPipeline:
             faiss_index: FAISS index for episodes
             cluster_info: Cluster ID to node indices mapping
         """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        logger.info(f"Saving data with timestamp {timestamp}...")
+        logger.info("Saving unified corpus...")
 
-        # Save memory nodes (JSON)
-        nodes_file = self.nodes_dir / f"nodes_{timestamp}.json"
+        # Save memory nodes (JSON) - single file
+        nodes_file = self.corpus_dir / "nodes.json"
         nodes_data = [n.to_dict() for n in nodes]
         with open(nodes_file, "w") as f:
-            json.dump(nodes_data, f, indent=2)
+            json.dump(nodes_data, f, indent=2, default=str)
         logger.info(f"Saved {len(nodes)} nodes to {nodes_file}")
 
-        # Save episodic memories (JSON)
-        episodes_file = self.episodes_dir / f"episodes_{timestamp}.json"
+        # Save episodic memories (JSON) - single file
+        episodes_file = self.corpus_dir / "episodes.json"
         episodes_data = [e.to_dict() for e in episodes]
         with open(episodes_file, "w") as f:
-            json.dump(episodes_data, f, indent=2)
+            json.dump(episodes_data, f, indent=2, default=str)
         logger.info(f"Saved {len(episodes)} episodes to {episodes_file}")
 
-        # Save embeddings (NumPy)
-        node_emb_file = self.vectors_dir / f"node_embeddings_{timestamp}.npy"
+        # Save dedup index
+        dedup_file = self.corpus_dir / "dedup_index.json"
+        with open(dedup_file, "w") as f:
+            json.dump({"ingested_ids": sorted(list(self.dedup_index))}, f, indent=2)
+        logger.info(f"Saved dedup index with {len(self.dedup_index)} entries")
+
+        # Save embeddings (NumPy) - single files
+        node_emb_file = self.vectors_dir / "nodes.npy"
         np.save(node_emb_file, node_embeddings)
-        logger.info(f"Saved node embeddings to {node_emb_file}")
+        logger.info(f"Saved node embeddings {node_embeddings.shape} to {node_emb_file}")
 
-        episode_emb_file = self.vectors_dir / f"episode_embeddings_{timestamp}.npy"
+        episode_emb_file = self.vectors_dir / "episodes.npy"
         np.save(episode_emb_file, episode_embeddings)
-        logger.info(f"Saved episode embeddings to {episode_emb_file}")
+        logger.info(f"Saved episode embeddings {episode_embeddings.shape} to {episode_emb_file}")
 
-        # Save FAISS index
+        # Save FAISS index - single file
         if faiss_index is not None and FAISS_AVAILABLE:
-            faiss_file = self.index_dir / f"episode_index_{timestamp}.faiss"
+            faiss_file = self.index_dir / "faiss.index"
             faiss.write_index(faiss_index, str(faiss_file))
             logger.info(f"Saved FAISS index to {faiss_file}")
 
-        # Save cluster info
-        cluster_file = self.index_dir / f"clusters_{timestamp}.json"
-        # Convert int keys to strings for JSON
+        # Save cluster info - single file
+        cluster_file = self.index_dir / "clusters.json"
         cluster_data = {str(k): v for k, v in cluster_info.items()}
         with open(cluster_file, "w") as f:
             json.dump(cluster_data, f, indent=2)
         logger.info(f"Saved cluster info to {cluster_file}")
 
-        # Save manifest
+        # Save unified manifest - single file (overwrites)
         manifest = {
-            "timestamp": timestamp,
-            "nodes_file": nodes_file.name,
-            "episodes_file": episodes_file.name,
-            "node_embeddings_file": node_emb_file.name,
-            "episode_embeddings_file": episode_emb_file.name,
-            "faiss_index_file": f"episode_index_{timestamp}.faiss" if faiss_index else None,
-            "clusters_file": cluster_file.name,
-            "stats": self.stats,
+            "version": "2.0.0",
+            "structure": "unified",
+            "updated_at": datetime.now().isoformat(),
+            "corpus": {
+                "nodes_file": "corpus/nodes.json",
+                "episodes_file": "corpus/episodes.json",
+                "dedup_index_file": "corpus/dedup_index.json",
+            },
+            "vectors": {
+                "nodes_file": "vectors/nodes.npy",
+                "episodes_file": "vectors/episodes.npy",
+            },
+            "indexes": {
+                "clusters_file": "indexes/clusters.json",
+                "faiss_file": "indexes/faiss.index" if faiss_index else None,
+            },
+            "stats": {
+                "total_nodes": len(nodes),
+                "total_episodes": len(episodes),
+                "n_clusters": len([k for k in cluster_info if k != -1]),
+                "n_noise": len(cluster_info.get(-1, [])),
+                "embedding_dim": node_embeddings.shape[1] if len(node_embeddings) > 0 else 0,
+                "ingest_stats": self.stats,
+            },
         }
-        manifest_file = self.output_dir / f"manifest_{timestamp}.json"
+        manifest_file = self.output_dir / "manifest.json"
         with open(manifest_file, "w") as f:
             json.dump(manifest, f, indent=2)
-        logger.info(f"Saved manifest to {manifest_file}")
+        logger.info(f"Saved unified manifest to {manifest_file}")
 
     async def run(
         self,
@@ -467,7 +635,16 @@ class IngestPipeline:
         provider: str = "auto",
     ) -> None:
         """
-        Run the full ingest pipeline.
+        Run the incremental ingest pipeline.
+
+        Flow:
+        1. Parse new exports
+        2. Dedup BEFORE embedding (saves API costs)
+        3. Embed ONLY new nodes
+        4. Merge with existing corpus
+        5. Re-cluster entire corpus (HDBSCAN)
+        6. Rebuild FAISS index
+        7. Save unified corpus (overwrites, not appends)
 
         Args:
             input_paths: List of file or directory paths
@@ -478,6 +655,7 @@ class IngestPipeline:
         # Collect all files to process
         files_to_process = []
         for path in input_paths:
+            path = Path(path)
             if path.is_file():
                 files_to_process.append(path)
             elif path.is_dir():
@@ -485,46 +663,189 @@ class IngestPipeline:
 
         logger.info(f"Found {len(files_to_process)} files to process")
 
-        # Process all files
-        all_nodes = []
-        all_episodes = []
+        # 1. Parse all new exports
+        new_nodes = []
+        new_episodes = []
 
         for filepath in files_to_process:
             nodes, episodes = await self.process_file(filepath, provider)
-            all_nodes.extend(nodes)
-            all_episodes.extend(episodes)
+            new_nodes.extend(nodes)
+            new_episodes.extend(episodes)
 
-        logger.info(f"Total: {len(all_nodes)} nodes, {len(all_episodes)} episodes")
+        logger.info(f"Parsed: {len(new_nodes)} new nodes, {len(new_episodes)} new episodes")
 
-        if not all_nodes:
-            logger.warning("No data to process!")
+        # 2. Dedup BEFORE embedding (saves API costs)
+        new_nodes = self._filter_duplicates(new_nodes)
+        new_episodes = self._filter_duplicate_episodes(new_episodes)
+
+        if not new_nodes and not new_episodes:
+            logger.info("No new content to ingest (all duplicates)")
+            self.stats["total_time_seconds"] = time.time() - start_time
+            print("\n" + "=" * 60)
+            print("INGEST COMPLETE - No new content")
+            print("=" * 60)
+            print(f"  Duplicates skipped: {self.stats['duplicates_skipped']}")
+            print("=" * 60)
             return
 
-        # Embed everything
-        node_embeddings, episode_embeddings = await self.embed_all(all_nodes, all_episodes)
+        # 3. Embed ONLY new nodes (not the entire corpus!)
+        logger.info(f"Embedding {len(new_nodes)} new nodes and {len(new_episodes)} new episodes...")
+        new_node_embeddings, new_episode_embeddings = await self.embed_all(new_nodes, new_episodes)
 
-        # Cluster nodes
-        all_nodes, cluster_info = self.cluster_nodes(all_nodes, node_embeddings)
+        # 4. Merge with existing corpus
+        merged_nodes = self.existing_nodes + new_nodes
+        merged_episodes = self.existing_episodes + new_episodes
 
-        # Build FAISS index for episodes
-        faiss_index = self.build_faiss_index(episode_embeddings)
+        # Merge embeddings
+        if self.existing_node_embeddings is not None and len(self.existing_node_embeddings) > 0:
+            merged_node_embeddings = np.concatenate([self.existing_node_embeddings, new_node_embeddings])
+        else:
+            merged_node_embeddings = new_node_embeddings
 
-        # Save everything
-        self.save_all(
-            all_nodes, all_episodes,
-            node_embeddings, episode_embeddings,
+        if self.existing_episode_embeddings is not None and len(self.existing_episode_embeddings) > 0:
+            merged_episode_embeddings = np.concatenate([self.existing_episode_embeddings, new_episode_embeddings])
+        else:
+            merged_episode_embeddings = new_episode_embeddings
+
+        logger.info(f"Merged corpus: {len(merged_nodes)} nodes, {len(merged_episodes)} episodes")
+
+        # 5. Re-cluster entire merged corpus (HDBSCAN)
+        # This is fast enough for 25K nodes (~2 seconds)
+        merged_nodes, cluster_info = self.cluster_nodes(merged_nodes, merged_node_embeddings)
+
+        # 6. Rebuild FAISS index for episodes
+        faiss_index = self.build_faiss_index(merged_episode_embeddings)
+
+        # 7. Save unified corpus (overwrites previous)
+        self._save_unified(
+            merged_nodes, merged_episodes,
+            merged_node_embeddings, merged_episode_embeddings,
             faiss_index, cluster_info,
         )
 
         # Final stats
         self.stats["total_time_seconds"] = time.time() - start_time
+        self.stats["final_node_count"] = len(merged_nodes)
+        self.stats["final_episode_count"] = len(merged_episodes)
+        self.stats["new_nodes_added"] = len(new_nodes)
+        self.stats["new_episodes_added"] = len(new_episodes)
 
         print("\n" + "=" * 60)
-        print("INGEST COMPLETE")
+        print("INGEST COMPLETE (Incremental)")
         print("=" * 60)
-        for key, value in self.stats.items():
-            print(f"  {key}: {value}")
+        print(f"  Existing nodes loaded: {self.stats['existing_nodes_loaded']}")
+        print(f"  New nodes added: {len(new_nodes)}")
+        print(f"  Duplicates skipped: {self.stats['duplicates_skipped']}")
+        print(f"  Final node count: {len(merged_nodes)}")
+        print(f"  Final episode count: {len(merged_episodes)}")
+        print(f"  Clusters: {len([k for k in cluster_info if k != -1])}")
+        print(f"  Time: {self.stats['total_time_seconds']:.1f}s")
         print("=" * 60)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE 5: Reasoning Trace Ingestion
+# ═══════════════════════════════════════════════════════════════════════════
+
+def ingest_reasoning_traces(traces_dir: Path, data_dir: Path, dedup_batch) -> dict:
+    """
+    Batch ingest reasoning traces as episodic memories.
+
+    Phase 5: Makes traces searchable in FAISS and retrievable through
+    the dual retriever. This is the batch path for traces that weren't
+    live-streamed to memory_pipeline.
+
+    Args:
+        traces_dir: Path to reasoning_traces folder
+        data_dir: Path to main data directory
+        dedup_batch: DedupBatch context manager instance
+
+    Returns:
+        Stats dict with counts
+    """
+    stats = {
+        "total_found": 0,
+        "already_ingested": 0,
+        "newly_ingested": 0,
+        "failed": 0,
+    }
+
+    traces_dir = Path(traces_dir)
+    data_dir = Path(data_dir)
+
+    if not traces_dir.exists():
+        logger.warning(f"Traces directory not found: {traces_dir}")
+        return stats
+
+    trace_files = list(traces_dir.glob("trace_*.json"))
+    stats["total_found"] = len(trace_files)
+
+    new_episodes = []
+
+    for trace_file in trace_files:
+        try:
+            with open(trace_file) as f:
+                trace_data = json.load(f)
+
+            trace_id = trace_data.get("id", "")
+
+            # Dedup check - check both raw ID and prefixed versions
+            if dedup_batch.is_duplicate(trace_id) or dedup_batch.is_duplicate(f"trace_{trace_id}"):
+                stats["already_ingested"] += 1
+                continue
+
+            # Also check by content hash (in case ID changed)
+            content = trace_data.get("response", "")
+            if content and dedup_batch.is_duplicate(f"trace_content_{trace_id}", content[:500]):
+                stats["already_ingested"] += 1
+                continue
+
+            # Convert to EpisodicMemory format
+            query = trace_data.get("query", "")
+            response = trace_data.get("response", "")
+            timestamp = trace_data.get("timestamp", datetime.now().isoformat())
+
+            episode = {
+                "id": f"ep_trace_{trace_id}",
+                "title": f"Reasoning: {query[:50]}...",
+                "summary": response[:500] if len(response) > 500 else response,
+                "messages": [
+                    {"role": "user", "content": query},
+                    {"role": "assistant", "content": response},
+                ],
+                "created_at": timestamp,
+                "dominant_intent": "reasoning_trace",
+                "metadata": {
+                    "trace_id": trace_id,
+                    "cognitive_phase": trace_data.get("cognitive_phase"),
+                    "score": trace_data.get("score"),
+                    "feedback_notes": trace_data.get("feedback_notes"),
+                    "memories_retrieved": trace_data.get("memories_retrieved", []),
+                    "memories_cited": trace_data.get("memories_cited", []),
+                    "total_duration_ms": trace_data.get("total_duration_ms"),
+                    "tokens_used": trace_data.get("tokens_used"),
+                },
+            }
+
+            new_episodes.append(episode)
+            dedup_batch.register(trace_id)
+            dedup_batch.register(f"trace_{trace_id}")
+            dedup_batch.register(f"ep_trace_{trace_id}")
+            stats["newly_ingested"] += 1
+
+        except Exception as e:
+            logger.warning(f"Failed to ingest {trace_file}: {e}")
+            stats["failed"] += 1
+
+    # Save new episodes
+    if new_episodes:
+        output_file = data_dir / "episodic_memories" / f"trace_episodes_{int(time.time())}.json"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "w") as f:
+            json.dump(new_episodes, f, indent=2, default=str)
+        logger.info(f"Saved {len(new_episodes)} trace episodes to {output_file}")
+
+    return stats
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -541,20 +862,51 @@ async def main():
         print("=" * 50)
         print("\nUsage:")
         print("  python ingest.py <path> [path2] [--provider=auto]")
+        print("  python ingest.py <data_dir> --traces")
         print("\nExamples:")
         print("  python ingest.py ./chat_exports/anthropic/conversations.json")
         print("  python ingest.py ./chat_exports/ --recursive")
         print("  python ingest.py ./export.json --provider=openai")
+        print("  python ingest.py ./data --traces  # Ingest reasoning traces")
         return
 
-    # Parse args
+    # Check for trace ingestion mode
+    if "--traces" in sys.argv:
+        from dedup import DedupBatch
+
+        # Find data dir (first non-flag argument)
+        data_dir = None
+        for arg in sys.argv[1:]:
+            if not arg.startswith("--"):
+                data_dir = Path(arg)
+                break
+
+        if not data_dir:
+            print("Error: Please specify data directory")
+            print("Usage: python ingest.py <data_dir> --traces")
+            return
+
+        traces_dir = data_dir / "reasoning_traces"
+
+        print(f"Ingesting reasoning traces from {traces_dir}...")
+        with DedupBatch(data_dir) as dedup:
+            stats = ingest_reasoning_traces(traces_dir, data_dir, dedup)
+
+        print(f"\nTrace ingestion complete:")
+        print(f"  Found: {stats['total_found']}")
+        print(f"  Already ingested: {stats['already_ingested']}")
+        print(f"  Newly ingested: {stats['newly_ingested']}")
+        print(f"  Failed: {stats['failed']}")
+        return
+
+    # Parse args for chat ingestion
     paths = []
     provider = "auto"
 
     for arg in sys.argv[1:]:
         if arg.startswith("--provider="):
             provider = arg.split("=")[1]
-        else:
+        elif not arg.startswith("--"):
             paths.append(Path(arg))
 
     # Run pipeline

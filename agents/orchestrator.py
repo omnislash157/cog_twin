@@ -71,32 +71,86 @@ class ProjectState:
     codebase_state: Dict[str, str] = field(default_factory=dict)
 
 
-def extract_and_save_files(output: str, project_root: Path) -> Dict[str, str]:
-    """Extract code blocks and save to files. Crude MVP parsing."""
-    files = {}
+def extract_and_save_files(
+    output: str,
+    project_root: Path,
+    existing_files: Dict[str, str]
+) -> Dict[str, str]:
+    """Extract code and apply surgical edits or create new files."""
+    saved = {}
 
-    # Pattern: ```python or ```py followed by content
+    # Look for TARGET_FILE and MODIFICATION_TYPE markers
+    target_match = re.search(r'TARGET_FILE:\s*(\S+)', output)
+    mod_type_match = re.search(r'MODIFICATION_TYPE:\s*(\S+)', output)
+
+    # Extract code blocks
     blocks = re.findall(r'```(?:python|py)?\n(.*?)```', output, re.DOTALL)
 
-    for i, block in enumerate(blocks):
-        # Try to find filename in first line
-        lines = block.strip().split('\n')
-        if lines and lines[0].startswith('# ') and ('.' in lines[0]):
-            # Extract filename, handle paths like "# backend/app/routes.py"
-            filename = lines[0][2:].strip()
-            content = '\n'.join(lines[1:])
-        else:
-            filename = f"output_{i}.py"
-            content = block
+    if not blocks:
+        print("  [FILE] No code blocks found")
+        return saved
 
-        # Save file
+    # Use last code block (final refined version)
+    code = blocks[-1]
+
+    # Check if first line is a file path comment
+    lines = code.strip().split('\n')
+    if lines and lines[0].startswith('# ') and ('.' in lines[0]):
+        # Full file output - extract filename from comment
+        filename = lines[0][2:].strip()
+        # Normalize path separators
+        filename = filename.replace('\\', '/')
+        content = '\n'.join(lines[1:])
+
         filepath = project_root / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding='utf-8')
-        files[filename] = content
+        saved[filename] = content
         print(f"  [FILE] Saved: {filepath}")
 
-    return files
+    elif target_match and mod_type_match:
+        # Surgical edit mode
+        target_file = target_match.group(1)
+        mod_type = mod_type_match.group(1).upper()
+
+        if mod_type == "NEW_FILE":
+            filepath = project_root / target_file
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            filepath.write_text(code, encoding='utf-8')
+            saved[target_file] = code
+            print(f"  [FILE] Created: {target_file}")
+
+        elif target_file in existing_files and mod_type in ["ADD_ENDPOINT", "ADD_FUNCTION"]:
+            # Append to existing file
+            filepath = project_root / target_file
+            existing = existing_files[target_file]
+            new_content = existing.rstrip() + "\n\n\n" + code.strip() + "\n"
+            filepath.write_text(new_content, encoding='utf-8')
+            saved[target_file] = new_content
+            print(f"  [FILE] Appended to: {target_file}")
+
+        elif target_file in existing_files and mod_type == "MODIFY_EXISTING":
+            # Save as .new for manual review
+            new_path = f"{target_file}.new"
+            filepath = project_root / new_path
+            filepath.write_text(code, encoding='utf-8')
+            saved[new_path] = code
+            print(f"  [FILE] Created for review: {new_path}")
+        else:
+            # Fallback: save with target filename
+            filepath = project_root / target_file
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            filepath.write_text(code, encoding='utf-8')
+            saved[target_file] = code
+            print(f"  [FILE] Saved (fallback): {target_file}")
+    else:
+        # No markers - save as output.py
+        filepath = project_root / "output.py"
+        filepath.write_text(code, encoding='utf-8')
+        saved["output.py"] = code
+        print(f"  [FILE] Saved (no markers): output.py")
+
+    return saved
 
 
 async def run_wave(
@@ -199,8 +253,8 @@ Output the final, ready-to-save code files. Each file should be in a code block 
     wave_summary = f"\n--- WAVE {wave_number} ---\nTask: {task}\nReviewer: {verdict}\n"
     project.convo_history += wave_summary
 
-    # Extract and save files
-    files_written = extract_and_save_files(final_output, project_root)
+    # Extract and save files (pass existing_files for surgical edits)
+    files_written = extract_and_save_files(final_output, project_root, existing_files)
     for fpath, content in files_written.items():
         project.codebase_state[fpath] = content
 

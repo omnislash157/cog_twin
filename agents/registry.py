@@ -17,11 +17,26 @@ load_dotenv(project_root / ".env")
 from model_adapter import create_adapter
 
 
+# Reasoning instruction to inject into agent prompts
+REASONING_INSTRUCTION = """
+When responding, include your reasoning process in <reasoning> tags:
+
+<reasoning>
+Step 1: [What you're analyzing or considering]
+Step 2: [What you found or observed]
+Step 3: [What you decided and why]
+</reasoning>
+
+Then provide your actual response after the reasoning block.
+"""
+
+
 class AgentRole(Enum):
     ORCHESTRATOR = "orchestrator"
     CONFIG = "config"
     EXECUTOR = "executor"
     REVIEWER = "reviewer"
+    QUALITY_GATE = "quality_gate"
     CONVO_HOLDER = "convo_holder"
     CODE_HOLDER = "code_holder"
 
@@ -38,14 +53,16 @@ class AgentConfig:
 AGENTS = {
     AgentRole.ORCHESTRATOR: AgentConfig(
         role=AgentRole.ORCHESTRATOR,
-        provider="xai",  # MVP: use Grok for all (no Anthropic key in .env)
+        provider="xai",
         model="grok-4-fast-reasoning",
         max_tokens=8192,
-        system_prompt="""You are the orchestrator of a coding swarm. You:
+        system_prompt=f"""You are the orchestrator of a coding swarm. You:
 1. Receive a task and break it into steps
 2. Review outputs from CONFIG, EXECUTOR, REVIEWER agents
 3. Do final refactor and approve
 4. Be concise. Output only what's needed for next agent.
+
+{REASONING_INSTRUCTION}
 
 When outputting final code, use this format for each file:
 ```python
@@ -59,36 +76,44 @@ When outputting final code, use this format for each file:
         provider="xai",
         model="grok-4-fast-reasoning",
         max_tokens=4096,
-        system_prompt="""You are the CONFIG agent. You:
+        system_prompt=f"""You are the CONFIG agent. You:
 1. READ the existing files provided carefully
-2. Identify WHERE to add new code (which file, which location)
-3. Output SURGICAL changes - modify existing files, don't rewrite from scratch
-4. Flag any new packages needed (human must approve)
+2. Identify the EXACT file and location to modify
+3. Note existing patterns (imports, style, structure)
+4. Output SURGICAL changes, not full rewrites
+
+{REASONING_INSTRUCTION}
 
 CRITICAL: You receive EXISTING FILES. Preserve all existing code. Only add/modify what's needed.
 
 Output format:
-TARGET_FILE: <path to modify>
-MODIFICATION_TYPE: add_endpoint | add_function | modify_existing
-INSERT_AFTER: <line or function name to insert after>
-NEW_PACKAGES: ["none"] or ["package1", "package2"]
-IMPORTS_TO_ADD: [list of new imports needed]
-CODE_TO_ADD:
+TARGET_FILE: [exact path from project root]
+MODIFICATION_TYPE: [add_endpoint | add_function | modify_existing | new_file]
+LOCATION: [after line X | in class Y | new file]
+EXISTING_IMPORTS_TO_KEEP: [list imports already in file]
+NEW_IMPORTS_NEEDED: [list or "none"]
+NEW_PACKAGES: [list or "none"]
+
+SCAFFOLD:
 ```python
-# The new code to insert (not the whole file)
-```"""
+# Show ONLY the new/changed code
+```
+
+CRITICAL: Preserve existing code. Only show what changes."""
     ),
 
     AgentRole.EXECUTOR: AgentConfig(
         role=AgentRole.EXECUTOR,
-        provider="xai",  # MVP: use Grok for all (no Anthropic key in .env)
+        provider="xai",
         model="grok-4-fast-reasoning",
         max_tokens=8192,
-        system_prompt="""You are the EXECUTOR agent. You:
+        system_prompt=f"""You are the EXECUTOR agent. You:
 1. Receive CONFIG's surgical change instructions
 2. Output the COMPLETE MODIFIED FILE with changes applied
 3. Preserve ALL existing code - only add/modify what CONFIG specified
 4. No placeholders, no TODOs - full implementation
+
+{REASONING_INSTRUCTION}
 
 CRITICAL: Output the ENTIRE file content, not just the new code. The file will be overwritten.
 
@@ -104,10 +129,12 @@ Output format - the complete file ready to save:
         provider="xai",
         model="grok-4-fast-reasoning",
         max_tokens=4096,
-        system_prompt="""You are the REVIEWER agent. You check for:
+        system_prompt=f"""You are the REVIEWER agent. You check for:
 - P0: Security holes, data loss, crashes
 - P1: Bugs, logic errors, missing validation
 - P2: Silent fails (bare except), swallowed errors
+
+{REASONING_INSTRUCTION}
 
 Output format:
 P0_ISSUES: [list or "none"]
@@ -118,6 +145,34 @@ FIXES_NEEDED:
 ```python
 # specific fixes if needed
 ```"""
+    ),
+
+    AgentRole.QUALITY_GATE: AgentConfig(
+        role=AgentRole.QUALITY_GATE,
+        provider="xai",
+        model="grok-4-fast-reasoning",
+        max_tokens=4096,
+        system_prompt=f"""You are the QUALITY_GATE agent. You make the final pass/fail decision for a wave.
+
+Review the complete wave output from CONFIG, EXECUTOR, and REVIEWER agents.
+
+{REASONING_INSTRUCTION}
+
+Your job:
+1. Did the code accomplish the TASK?
+2. Did REVIEWER find any P0/P1 issues that weren't fixed?
+3. Is the code ready to commit?
+
+Output format:
+VERDICT: PASS | FAIL | HUMAN_REVIEW
+
+If FAIL, also provide:
+FAILURE_TYPE: [full_rewrite | missing_imports | logic_error | security_issue | incomplete]
+AGENT_BLAMED: [config | executor | reviewer]
+ROOT_CAUSE: [one sentence]
+RECOMMENDATION: [specific fix for retry]
+
+If HUMAN_REVIEW, explain what needs human input."""
     ),
 
     AgentRole.CONVO_HOLDER: AgentConfig(

@@ -1,12 +1,23 @@
-"""Wave-based orchestration loop."""
+"""
+Wave-based orchestration with full persistence.
+Every turn saved. Failures tracked. Holders queried.
+"""
 import asyncio
 import re
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
-from datetime import datetime
+from typing import List, Dict, Optional, Any
 
-from .registry import AgentRole, spawn_agent
+from .registry import AgentRole, spawn_agent, AGENTS
+from .schemas import (
+    Project, WaveSummary, Failure,
+    OutboundTurn, InboundTurn, FilesWritten, FileOperation,
+    Verdict, generate_id, now_iso
+)
+from .persistence import SwarmPersistence
+from .reasoning import extract_reasoning_trace, strip_reasoning_tags
+from .holders import CodeHolder, ConvoHolder, HolderQuery
 
 # Packages already in this project - don't gate on these
 KNOWN_PACKAGES = {

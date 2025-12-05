@@ -2,6 +2,24 @@
 
 > 2-4 lines per session. Read CONTEXT.md for architecture.
 
+## 2025-12-05 - ecstatic-wescoff (Phase 10b: Swarm Infrastructure)
+- schemas.py: Unified data structures (OutboundTurn, InboundTurn, WaveSummary, Failure, Project)
+- persistence.py: JSON storage for projects, waves, failures (agents/data/projects/)
+- reasoning.py: Extract <reasoning> traces from model responses
+- holders.py: CodeHolder + ConvoHolder for queryable context (get_file, search, summarize)
+- swarm_orchestrator.py: Full persistence orchestrator with QUALITY_GATE agent
+- registry.py: Added REASONING_INSTRUCTION to all prompts, new QUALITY_GATE role
+
+---
+
+## 2025-12-05 - busy-robinson (Phase 10a: Multi-Agent Swarm MVP)
+- agents/ module: 4-agent wave loop (CONFIG → EXECUTOR → REVIEWER → ORCHESTRATOR)
+- File reading: read_project_files() scans .py files, passes to CONFIG for context
+- Surgical edits: extract_and_save_files() handles ADD_ENDPOINT, MODIFY_EXISTING, NEW_FILE
+- Sandbox at agents/sandbox/ for safe testing (.gitignored)
+
+---
+
 ## 2025-12-05 - graceful-turing (Phase 9a)
 - Swipeable workspaces: tabs, dots, context menu (rename/delete)
 - Panel layouts persist per workspace (localStorage)

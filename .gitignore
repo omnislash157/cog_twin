@@ -70,3 +70,4 @@ chat_exports/
 *.conversations.json
 *_export_*.json
 node_modules/
+.svelte-kit/

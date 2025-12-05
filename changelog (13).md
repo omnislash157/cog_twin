@@ -2,6 +2,11 @@
 
 > 2-4 lines per session. Read CONTEXT.md for architecture.
 
+## 2025-12-05 - graceful-turing (Phase 9a)
+- Swipeable workspaces: tabs, dots, context menu (rename/delete)
+- Panel layouts persist per workspace (localStorage)
+- Fixed .gitignore (was hiding frontend/src/lib/)
+
 ---
 
 ## 2025-12-05 - practical-hawking (metacognitive dashboard)

@@ -3,10 +3,11 @@
 	import { theme, toggleTheme } from '$lib/stores/theme';
 	import { websocket } from '$lib/stores/websocket';
 	import { session } from '$lib/stores/session';
-	import { visibleArtifacts, panels, closedPanels } from '$lib/stores';
+	import { visibleArtifacts, panels, closedPanels, workspaces } from '$lib/stores';
 	import ArtifactPane from '$lib/components/ArtifactPane.svelte';
 	import AnalyticsDashboard from '$lib/components/AnalyticsDashboard.svelte';
 	import FloatingPanel from '$lib/components/FloatingPanel.svelte';
+	import WorkspaceNav from '$lib/components/WorkspaceNav.svelte';
 	import MemoryCanvas from '$lib/threlte/MemoryCanvas.svelte';
 	import { marked } from 'marked';
 
@@ -207,6 +208,9 @@
 			</button>
 		</div>
 	</header>
+
+	<!-- Workspace Navigation -->
+	<WorkspaceNav />
 
 	<!-- Main Content -->
 	<main class="dashboard-main">

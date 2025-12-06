@@ -290,6 +290,20 @@ function createSwarmStore() {
 					}));
 					break;
 
+				case 'swarm_diagnostic':
+					// CONFIG entered diagnostic mode - log for visibility
+					console.log('[Swarm] Diagnostic:', data.failure_type, data.fix_strategy);
+					update(s => ({
+						...s,
+						error: `Diagnosing: ${data.failure_type} (${Math.round(data.confidence * 100)}% conf)`,
+					}));
+					break;
+
+				case 'swarm_consultation':
+					// Agent consultation result
+					console.log('[Swarm] Consultation:', data.agent, data.recommended_action);
+					break;
+
 				case 'pong':
 					// Heartbeat response
 					break;

@@ -112,16 +112,27 @@ CRITICAL: Preserve existing code. Only show what changes."""
 2. Output the COMPLETE MODIFIED FILE with changes applied
 3. Preserve ALL existing code - only add/modify what CONFIG specified
 4. No placeholders, no TODOs - full implementation
+5. Emit tool calls to save and test the code
 
 {REASONING_INSTRUCTION}
 
 CRITICAL: Output the ENTIRE file content, not just the new code. The file will be overwritten.
 
-Output format - the complete file ready to save:
-```python
-# path/to/file.py
-<entire file content with changes applied>
-```"""
+After writing code, emit tool calls to save and test it:
+
+<tool_calls>
+{{"tool": "write_file", "path": "app/main.py", "content": "<full file content>"}}
+{{"tool": "run_command", "cmd": "pip install fastapi uvicorn"}}
+{{"tool": "run_command", "cmd": "python -m pytest app/test_main.py -v"}}
+</tool_calls>
+
+Tool call format (one JSON per line inside <tool_calls> tags):
+- write_file: {{"tool": "write_file", "path": "relative/path.py", "content": "file content"}}
+- read_file: {{"tool": "read_file", "path": "relative/path.py"}}
+- run_command: {{"tool": "run_command", "cmd": "python script.py"}}
+- delete_file: {{"tool": "delete_file", "path": "relative/path.py"}}
+
+If execution fails, you'll receive the error. Fix the code and re-emit the tool calls."""
     ),
 
     AgentRole.REVIEWER: AgentConfig(
@@ -211,3 +222,32 @@ async def spawn_agent(role: AgentRole, message: str, context: str = "") -> str:
     )
 
     return response.content[0].text
+
+
+async def spawn_agent_with_swarm_context(
+    role: AgentRole,
+    message: str,
+    project_name: str,
+    project_goal: str,
+    wave: str,
+    context: str = ""
+) -> str:
+    """
+    Spawn an agent with swarm awareness context injected.
+
+    Used for diagnostic and consultation flows where agents need to know
+    about the swarm structure and their role within it.
+    """
+    from .diagnostic import build_agent_awareness
+    from .schemas import Project
+
+    # Build a minimal Project for context
+    project = Project(name=project_name, goal=project_goal)
+
+    # Get agent awareness block
+    awareness = build_agent_awareness(project, wave, role)
+
+    # Prepend awareness to context
+    full_context = f"{awareness}\n\n{context}" if context else awareness
+
+    return await spawn_agent(role, message, full_context)

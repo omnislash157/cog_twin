@@ -10,7 +10,8 @@ from datetime import datetime
 
 from .schemas import (
     Project, WaveSummary, Failure,
-    OutboundTurn, InboundTurn, FilesWritten
+    OutboundTurn, InboundTurn, FilesWritten,
+    Diagnosis, ConsultationOutcome
 )
 
 
@@ -181,3 +182,113 @@ class SwarmPersistence:
                 return f"{major}.{int(minor) + 1}"
             else:
                 return f"{last}.1"
+
+    # === Diagnosis Management (Phase 10e: Resilience Loop) ===
+
+    def save_diagnosis(self, project_id: str, wave: str, diagnosis: Diagnosis) -> None:
+        """Store diagnosis for learning."""
+        diag_dir = self.project_dir(project_id) / "diagnostics"
+        diag_dir.mkdir(exist_ok=True)
+
+        filepath = diag_dir / f"wave_{wave}_diagnosis.json"
+        filepath.write_text(json.dumps(diagnosis.to_dict(), indent=2, default=str))
+
+    def load_diagnosis(self, project_id: str, wave: str) -> Optional[Diagnosis]:
+        """Load diagnosis for a wave if exists."""
+        filepath = self.project_dir(project_id) / "diagnostics" / f"wave_{wave}_diagnosis.json"
+        if not filepath.exists():
+            return None
+
+        data = json.loads(filepath.read_text())
+
+        # Reconstruct ConsultationOutcome objects
+        outcomes = []
+        for outcome_data in data.get("consultation_outcomes", []):
+            outcomes.append(ConsultationOutcome(**outcome_data))
+        data["consultation_outcomes"] = outcomes
+
+        return Diagnosis(**data)
+
+    def get_diagnostics(self, project_id: str) -> List[Diagnosis]:
+        """Retrieve all diagnostics for pattern analysis."""
+        diag_dir = self.project_dir(project_id) / "diagnostics"
+        if not diag_dir.exists():
+            return []
+
+        diagnostics = []
+        for f in sorted(diag_dir.glob("*.json")):
+            data = json.loads(f.read_text())
+
+            # Reconstruct ConsultationOutcome objects
+            outcomes = []
+            for outcome_data in data.get("consultation_outcomes", []):
+                outcomes.append(ConsultationOutcome(**outcome_data))
+            data["consultation_outcomes"] = outcomes
+
+            diagnostics.append(Diagnosis(**data))
+
+        return diagnostics
+
+    def mark_consultation_helpful(
+        self,
+        project_id: str,
+        wave: str,
+        agent: str,
+        helpful: bool
+    ) -> None:
+        """
+        After retry success/fail, mark which consultation was helpful.
+
+        This allows the system to learn which agents give useful advice
+        for different failure types.
+        """
+        filepath = self.project_dir(project_id) / "diagnostics" / f"wave_{wave}_diagnosis.json"
+        if not filepath.exists():
+            return
+
+        data = json.loads(filepath.read_text())
+
+        for outcome in data.get("consultation_outcomes", []):
+            if outcome.get("agent") == agent:
+                outcome["helpful"] = helpful
+
+        filepath.write_text(json.dumps(data, indent=2, default=str))
+
+    def get_agent_helpfulness_stats(self, project_id: str) -> Dict[str, Dict[str, int]]:
+        """
+        Aggregate which agents give helpful advice over time.
+
+        Returns: {agent_name: {"helpful": N, "unhelpful": N, "unknown": N}}
+        """
+        diagnostics = self.get_diagnostics(project_id)
+        stats: Dict[str, Dict[str, int]] = {}
+
+        for d in diagnostics:
+            for outcome in d.consultation_outcomes:
+                agent = outcome.agent
+                if agent not in stats:
+                    stats[agent] = {"helpful": 0, "unhelpful": 0, "unknown": 0}
+
+                if outcome.helpful is True:
+                    stats[agent]["helpful"] += 1
+                elif outcome.helpful is False:
+                    stats[agent]["unhelpful"] += 1
+                else:
+                    stats[agent]["unknown"] += 1
+
+        return stats
+
+    def get_failure_type_stats(self, project_id: str) -> Dict[str, int]:
+        """
+        Count failure types across all diagnostics.
+
+        Useful for identifying common failure patterns.
+        """
+        diagnostics = self.get_diagnostics(project_id)
+        stats: Dict[str, int] = {}
+
+        for d in diagnostics:
+            ft = d.failure_type
+            stats[ft] = stats.get(ft, 0) + 1
+
+        return stats

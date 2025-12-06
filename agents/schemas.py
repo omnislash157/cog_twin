@@ -39,6 +39,12 @@ class Verdict(Enum):
     HUMAN_REVIEW = "human_review"
 
 
+class ConfigMode(Enum):
+    """CONFIG agent operating modes."""
+    PLANNING = "planning"      # Normal flow: analyze task, emit modification plan
+    DIAGNOSTIC = "diagnostic"  # On failure: query holders, emit Diagnosis
+
+
 @dataclass
 class ReasoningStep:
     """Single step in model's reasoning trace."""
@@ -231,3 +237,87 @@ class Project:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+# =============================================================================
+# Resilience Loop Schemas (Phase 10e)
+# =============================================================================
+
+@dataclass
+class ToolFailure:
+    """
+    Failure information from SandboxExecutor → ORCHESTRATOR.
+
+    Note on consulted_already: This is set by _on_tool_failure looking up
+    orchestrator state, NOT by handle_tool_failure. It means "we consulted
+    on a PREVIOUS failure for this wave", not "we just consulted in THIS call".
+    """
+    wave: str
+    tool_name: str
+    tool_args: Dict[str, Any]
+    error_type: str           # Exception class name
+    error_message: str
+    stack_trace: str
+    attempt: int              # 1, 2, or 3
+    executor_context: str     # What EXECUTOR was trying to accomplish
+    timestamp: str = field(default_factory=now_iso)
+    consulted_already: bool = False  # True if we consulted on PREVIOUS failure
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ConsultationOutcome:
+    """Result of consulting an agent during diagnostic flow."""
+    agent: str
+    risk: str
+    confidence: float
+    recommended_action: str
+    notes: str = ""
+    helpful: Optional[bool] = None  # Populated post-retry to track effectiveness
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class Diagnosis:
+    """
+    CONFIG DIAGNOSTIC mode output → ORCHESTRATOR.
+
+    All fields are open strings with suggestions, not strict enums.
+    This allows CONFIG to express novel failure types and strategies.
+    """
+    failure_type: str         # Suggestions: import_missing, path_wrong, syntax_error, dep_conflict, etc.
+    root_cause: str           # Open field, blank if unknown
+    fix_strategy: str         # Suggestions: retry_executor, retry_tool, add_dep, modify_config, human_review, abort
+    consult_with: List[str]   # Agent names or empty
+    context_for_retry: str    # Injected into next EXECUTOR prompt
+    next_step_hint: str       # Neutral hint for any agent (REVIEWER, QUALITY_GATE, etc.)
+    confidence: float         # 0.0 - 1.0
+    holder_queries_made: List[Dict[str, Any]] = field(default_factory=list)  # Audit trail
+    consultation_outcomes: List[ConsultationOutcome] = field(default_factory=list)
+    reasoning: str = ""
+    timestamp: str = field(default_factory=now_iso)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d['consultation_outcomes'] = [c.to_dict() if hasattr(c, 'to_dict') else c for c in self.consultation_outcomes]
+        return d
+
+
+@dataclass
+class DiagnosticResult:
+    """
+    Result of handle_tool_failure() decision.
+    """
+    action: Literal["retry", "human_review", "abort"]
+    diagnosis: Optional[Diagnosis] = None
+    message: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = {"action": self.action, "message": self.message}
+        if self.diagnosis:
+            d["diagnosis"] = self.diagnosis.to_dict()
+        return d

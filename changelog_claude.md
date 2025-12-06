@@ -2,6 +2,33 @@
 
 > 2-4 lines per session. Read CONTEXT.md for architecture.
 
+## 2025-12-05 - clever-lichterman (Phase 10f: Swarm UI Launcher)
+- SwarmPanel.svelte: Added launcher form (project name, goal, tasks input) with submit to /api/swarm/start
+- swarm.ts: Added handlers for swarm_diagnostic and swarm_consultation WebSocket events
+- UI shows launcher when idle, hides when swarm active; all existing dashboard features preserved
+
+---
+
+## 2025-12-05 - gracious-archimedes (Phase 10e: Resilience Loop)
+- diagnostic.py: CONFIG DIAGNOSTIC mode with agent awareness block, holder queries, diagnosis parsing
+- consultation.py: Cross-agent consultation flow (EXECUTOR/REVIEWER/QUALITY_GATE input on failures)
+- swarm_orchestrator.py: handle_tool_failure() decision tree, consultation aggregation, retry with context
+- persistence.py: Diagnosis storage + mark_consultation_helpful() for learning which agents give useful advice
+- test_diagnostic.py: 26 tests for diagnostic prompts, consultation parsing, confidence aggregation
+- WebSocket events: swarm_diagnostic, swarm_consultation for live dashboard visibility
+
+---
+
+## 2025-12-05 - gracious-archimedes (Phase 10d: Sandbox Executor)
+- sandbox_executor.py: Isolated execution with Python 3.11 venv (hdbscan compat), self-healing retry loop (max 3), HITL for unknown packages
+- promote_cli.py: Human review workflow for Skynet Procedure (review/approve/reject/rollback)
+- registry.py: EXECUTOR now emits <tool_calls> for write_file, run_command, etc.
+- swarm_orchestrator.py: Wired sandbox execution between EXECUTOR and REVIEWER, promotion staging on PASS
+- test_sandbox_executor.py: 18 tests covering tool parsing, sandbox writes, commands, promotions
+- Note: Sandbox venv uses Python 3.11 specifically (auto-detects via py launcher or known paths)
+
+---
+
 ## 2025-12-05 - intelligent-lamport (Phase 10c: Swarm Dashboard)
 - swarm_orchestrator.py: WebSocket broadcasting (BroadcastCallback, _broadcast_turn, _broadcast_wave_start/end, _broadcast_failure)
 - backend/app/main.py: /ws/swarm endpoint + SwarmConnectionManager + /api/swarm/start API

@@ -38,7 +38,54 @@
 	// Expanded reasoning
 	let expandedReasoning = false;
 
-	// Connect on mount
+	// Launcher form state
+	let projectName = 'swarm_project';
+	let goalInput = '';
+	let taskInput = '';
+	let launching = false;
+	let launchError = '';
+
+
+	
+	// Launch swarm handler
+	async function launchSwarm() {
+		if (!goalInput.trim() || !taskInput.trim()) {
+			launchError = 'Enter goal and at least one task';
+			return;
+		}
+
+		launching = true;
+		launchError = '';
+
+		try {
+			const tasks = taskInput.split('
+').filter(t => t.trim());
+			const response = await fetch('http://localhost:8000/api/swarm/start', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					project_name: projectName,
+					goal: goalInput,
+					tasks
+				})
+			});
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.detail || 'Failed to start swarm');
+			}
+
+			// Clear form on success
+			goalInput = '';
+			taskInput = '';
+		} catch (e) {
+			launchError = e instanceof Error ? e.message : 'Unknown error';
+		} finally {
+			launching = false;
+		}
+	}
+
+// Connect on mount
 	onMount(() => {
 		swarm.connect();
 	});
@@ -55,6 +102,9 @@
 	// Reactive: show failure alert
 	$: showFailureAlert = $latestFailure &&
 		Date.now() - new Date($latestFailure.timestamp).getTime() < 10000;
+
+	// Show launcher when idle
+	$: showLauncher = !$swarm.active;
 </script>
 
 <div class="swarm-panel">
@@ -72,6 +122,54 @@
 			{/if}
 		</div>
 	</header>
+
+	<!-- Launcher Form (when idle) -->
+	{#if showLauncher}
+		<div class="launcher-section">
+			<div class="launcher-header">
+				<span class="launcher-title">Launch New Swarm</span>
+			</div>
+			<form class="launcher-form" on:submit|preventDefault={launchSwarm}>
+				<input
+					type="text"
+					bind:value={projectName}
+					placeholder="Project name"
+					class="launcher-input"
+					disabled={launching || !$swarm.connected}
+				/>
+				<input
+					type="text"
+					bind:value={goalInput}
+					placeholder="Goal: What should the swarm build?"
+					class="launcher-input"
+					disabled={launching || !$swarm.connected}
+				/>
+				<textarea
+					bind:value={taskInput}
+					placeholder="Tasks (one per line)"
+					class="launcher-textarea"
+					rows="3"
+					disabled={launching || !$swarm.connected}
+				></textarea>
+				{#if launchError}
+					<div class="launcher-error">{launchError}</div>
+				{/if}
+				<button
+					type="submit"
+					class="launcher-btn"
+					disabled={launching || !$swarm.connected || !goalInput.trim() || !taskInput.trim()}
+				>
+					{#if launching}
+						Starting...
+					{:else if !$swarm.connected}
+						Connecting...
+					{:else}
+						Launch Swarm
+					{/if}
+				</button>
+			</form>
+		</div>
+	{/if}
 
 	<!-- Failure Alert Banner -->
 	{#if showFailureAlert && $latestFailure}
@@ -291,7 +389,99 @@
 		font-size: 0.75rem;
 	}
 
-	/* Failure Alert */
+	
+	/* Launcher Section */
+	.launcher-section {
+		padding: 1rem;
+		background: var(--bg-tertiary, #0d0d0d);
+		border-bottom: 1px solid var(--border-dim, #222);
+	}
+
+	.launcher-header {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.75rem;
+	}
+
+	.launcher-title {
+		font-weight: 600;
+		font-size: 0.85rem;
+		color: var(--neon-yellow, #ffff00);
+	}
+
+	.launcher-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.launcher-input,
+	.launcher-textarea {
+		width: 100%;
+		padding: 0.5rem 0.75rem;
+		background: var(--bg-secondary, #111);
+		border: 1px solid var(--border-dim, #222);
+		border-radius: 4px;
+		color: var(--text-primary, #fff);
+		font-family: inherit;
+		font-size: 0.8rem;
+		transition: border-color 0.2s;
+	}
+
+	.launcher-input:focus,
+	.launcher-textarea:focus {
+		outline: none;
+		border-color: var(--neon-cyan, #00ffff);
+	}
+
+	.launcher-input:disabled,
+	.launcher-textarea:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.launcher-textarea {
+		resize: vertical;
+		min-height: 60px;
+	}
+
+	.launcher-error {
+		padding: 0.5rem;
+		background: rgba(255, 0, 102, 0.1);
+		border: 1px solid var(--neon-pink, #ff0066);
+		border-radius: 4px;
+		color: var(--neon-pink, #ff0066);
+		font-size: 0.75rem;
+	}
+
+	.launcher-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		padding: 0.75rem 1rem;
+		background: linear-gradient(135deg, #6366f1, #8b5cf6);
+		border: none;
+		border-radius: 4px;
+		color: white;
+		font-weight: 600;
+		font-size: 0.85rem;
+		cursor: pointer;
+		transition: all 0.2s;
+	}
+
+	.launcher-btn:hover:not(:disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+	}
+
+	.launcher-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+/* Failure Alert */
 	.failure-alert {
 		display: flex;
 		align-items: center;

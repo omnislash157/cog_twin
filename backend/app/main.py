@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, BackgroundTasks
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import tempfile
@@ -397,6 +398,13 @@ async def list_ingest_jobs():
 
 
 
+# ===== SWARM MODELS =====
+class SwarmStartRequest(BaseModel):
+    project_name: str = "swarm_project"
+    goal: str = "Build feature"
+    tasks: list[str] | None = None
+
+
 # ===== SWARM DASHBOARD ENDPOINTS =====
 
 @app.get("/api/swarm/status")
@@ -411,10 +419,8 @@ async def get_swarm_status():
 
 @app.post("/api/swarm/start")
 async def start_swarm(
+    request: SwarmStartRequest,
     background_tasks: BackgroundTasks,
-    project_name: str = "swarm_project",
-    goal: str = "Build feature",
-    tasks: list[str] = None
 ):
     """Start a new swarm project."""
     global active_swarm
@@ -422,8 +428,9 @@ async def start_swarm(
     if swarm_manager.swarm_active:
         raise HTTPException(400, "Swarm already running")
     
-    if not tasks:
-        tasks = ["Implement the requested feature"]
+    project_name = request.project_name
+    goal = request.goal
+    tasks = request.tasks if request.tasks else ["Implement the requested feature"]
     
     swarm_manager.swarm_active = True
     swarm_manager.current_project = project_name

@@ -58,8 +58,7 @@
 		launchError = '';
 
 		try {
-			const tasks = taskInput.split('
-').filter(t => t.trim());
+			const tasks = taskInput.split('\n').filter(t => t.trim());
 			const response = await fetch('http://localhost:8000/api/swarm/start', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -72,14 +71,24 @@
 
 			if (!response.ok) {
 				const error = await response.json();
-				throw new Error(error.detail || 'Failed to start swarm');
+				// Handle FastAPI 422 validation errors (array of {loc, msg, type})
+				const msg = Array.isArray(error.detail)
+					? error.detail.map((d: {msg?: string; loc?: string[]}) => d.msg || d.loc?.join('.')).join(', ')
+					: (error.detail || 'Failed to start swarm');
+				throw new Error(msg);
 			}
 
 			// Clear form on success
 			goalInput = '';
 			taskInput = '';
 		} catch (e) {
-			launchError = e instanceof Error ? e.message : 'Unknown error';
+			if (e instanceof Error) {
+				launchError = e.message;
+			} else if (typeof e === "object" && e !== null) {
+				launchError = JSON.stringify(e);
+			} else {
+				launchError = 'Unknown error';
+			}
 		} finally {
 			launching = false;
 		}

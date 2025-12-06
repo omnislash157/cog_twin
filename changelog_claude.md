@@ -2,6 +2,33 @@
 
 > 2-4 lines per session. Read CONTEXT.md for architecture.
 
+## 2025-12-06 - stoic-fermat (AcidBurn Pipeline Phase 1)
+- acidburn_pipeline/ingest.py: Stream HuggingFace Gutenberg → chunk to 2K tokens → jsonl
+- Threshold-based retrieval pipeline for massive datasets (books, papers, company docs)
+- Usage: `python -m acidburn_pipeline.ingest --limit 100 --output chunks.jsonl`
+- Test: 100 books → 7,814 chunks, ~15.5M tokens
+
+---
+
+## 2025-12-06 - brave-boyd (Swarm Bugfixes + Pipeline Debug Tools)
+- sandbox_executor.py: Added cd, npm, node, npx to COMMAND_WHITELIST (was blocking frontend commands)
+- registry.py: Increased CONFIG/EXECUTOR max_tokens 4096/8192 → 16384 (was truncating large scaffolds)
+- registry.py: Added BULK OPERATIONS instruction to CONFIG prompt (chunking for large files)
+- Root cause: EXECUTOR JSON tool_calls were valid, but `cd frontend && npm install` failed whitelist check
+- debug_pipeline.py: Trace what model sees (retrieval results, formatted memories, episodic section)
+- read_traces.py: CLI to browse reasoning traces and chat exchanges
+- agents/SWARM.md: AI cold start doc for swarm architecture
+
+### read_traces.py Usage
+```bash
+python read_traces.py              # Last 5 exchanges
+python read_traces.py -t           # Show traces instead
+python read_traces.py -q "invoice" # Search by query
+python read_traces.py -v -n 3      # Verbose, last 3
+```
+
+---
+
 ## 2025-12-05 - clever-lichterman (Phase 10f: Swarm UI Launcher)
 - SwarmPanel.svelte: Added launcher form (project name, goal, tasks input) with submit to /api/swarm/start
 - swarm.ts: Added handlers for swarm_diagnostic and swarm_consultation WebSocket events

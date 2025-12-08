@@ -2,25 +2,45 @@
 
 > 2-4 lines per session. Read CONTEXT.md for architecture.
 
-## 2025-12-06 - affectionate-jemison (Swarm V2: Claude Opus Orchestrator)
-- registry.py: Claude Opus ORCHESTRATOR (anthropic), Grok holders (CODE/CONVO/USER_HOLDER)
-- holder_daemon.py: NEW - DaemonManager, CodeHolderDaemon (codebase snapshot), ConvoHolderDaemon (JSON log queries), UserHolderDaemon (SQUIRREL bridge)
-- claude_orchestrator.py: NEW - Action-based control loop (QUERY/SPAWN/SPAWN_PARALLEL/COMPLETE/ESCALATE), diagnostic flow, holder integration
-- backend/app/main.py: Rewired /api/swarm/start to use ClaudeOrchestrator instead of SwarmOrchestrator
+## 2025-12-07 - acidburn-research-lane (Phase 9: 5th Lane)
+- research_pipeline.py: Domain classifier + curated corpus retrieval (medical/law/science policies)
+- embed_research.py: AcidBurn Phase 2 - embed chunks to vectors for research corpora
+- venom_voice.py: Added research_context/research_instructions to VoiceContext, _format_research_section()
+- cog_twin.py: Wired ResearchPipeline into query flow (step 2.6), parallel with personal memory lanes
+- config.yaml: Added research_pipeline section (enabled, top_k, domain overrides)
+
+### Architecture
+```
+query --> domain_classifier (regex + keywords)
+      --> 4x personal memory lanes (always fire in parallel)
+      --> research lane (5th lane)
+          |-- medical/law/finance: ONLY curated corpus (no web)
+          |-- science/history: corpus first, web if conf < 0.68
+          |-- casual/coding: fastest path
+```
+
+### Usage
+```bash
+# Phase 1: Ingest (already done)
+python ingest.py --limit 100 --output chunks.jsonl
+
+# Phase 2: Embed
+python embed_research.py --input chunks.jsonl --corpus gutenberg_general
+```
 
 ---
 
 ## 2025-12-06 - stoic-fermat (AcidBurn Pipeline Phase 1)
-- acidburn_pipeline/ingest.py: Stream HuggingFace Gutenberg → chunk to 2K tokens → jsonl
+- ingest.py: Stream HuggingFace Gutenberg -> chunk to 2K tokens -> jsonl
 - Threshold-based retrieval pipeline for massive datasets (books, papers, company docs)
-- Usage: `python -m acidburn_pipeline.ingest --limit 100 --output chunks.jsonl`
-- Test: 100 books → 7,814 chunks, ~15.5M tokens
+- Usage: `python ingest.py --limit 100 --output chunks.jsonl`
+- Test: 100 books -> 7,814 chunks, ~15.5M tokens
 
 ---
 
 ## 2025-12-06 - brave-boyd (Swarm Bugfixes + Pipeline Debug Tools)
 - sandbox_executor.py: Added cd, npm, node, npx to COMMAND_WHITELIST (was blocking frontend commands)
-- registry.py: Increased CONFIG/EXECUTOR max_tokens 4096/8192 → 16384 (was truncating large scaffolds)
+- registry.py: Increased CONFIG/EXECUTOR max_tokens 4096/8192 â†’ 16384 (was truncating large scaffolds)
 - registry.py: Added BULK OPERATIONS instruction to CONFIG prompt (chunking for large files)
 - Root cause: EXECUTOR JSON tool_calls were valid, but `cd frontend && npm install` failed whitelist check
 - debug_pipeline.py: Trace what model sees (retrieval results, formatted memories, episodic section)
@@ -85,7 +105,7 @@ python read_traces.py -v -n 3      # Verbose, last 3
 ---
 
 ## 2025-12-05 - busy-robinson (Phase 10a: Multi-Agent Swarm MVP)
-- agents/ module: 4-agent wave loop (CONFIG → EXECUTOR → REVIEWER → ORCHESTRATOR)
+- agents/ module: 4-agent wave loop (CONFIG â†’ EXECUTOR â†’ REVIEWER â†’ ORCHESTRATOR)
 - File reading: read_project_files() scans .py files, passes to CONFIG for context
 - Surgical edits: extract_and_save_files() handles ADD_ENDPOINT, MODIFY_EXISTING, NEW_FILE
 - Sandbox at agents/sandbox/ for safe testing (.gitignored)
@@ -147,12 +167,12 @@ python read_traces.py -v -n 3      # Verbose, last 3
 
 # NEW TRUST HIERARCHY block after OPERATIONAL PARAMETERS:
 + TRUST HIERARCHY - ABSOLUTE (MEMORIZE THIS):
-+ 1. What user said THIS SESSION → Absolute truth
-+ 2. What user said LAST HOUR → Near-absolute truth
-+ 3. SQUIRREL results → High trust (temporal recall)
-+ 4. EPISODIC results → Medium trust (may be old context)
-+ 5. VECTOR results → Low trust (topically similar ≠ factually relevant)
-+ 6. GREP results → Verification only (word frequency ≠ meaning)
++ 1. What user said THIS SESSION â†’ Absolute truth
++ 2. What user said LAST HOUR â†’ Near-absolute truth
++ 3. SQUIRREL results â†’ High trust (temporal recall)
++ 4. EPISODIC results â†’ Medium trust (may be old context)
++ 5. VECTOR results â†’ Low trust (topically similar â‰  factually relevant)
++ 6. GREP results â†’ Verification only (word frequency â‰  meaning)
 +
 + CONFLICT RESOLUTION PATTERN:
 + "You said [X]. Search found [Y]. Since you stated [X], I'll use that as ground truth."
@@ -163,7 +183,7 @@ python read_traces.py -v -n 3      # Verbose, last 3
 # _format_memories():
 - "VECTOR RETRIEVAL (semantic similarity)"
 + "VECTOR RETRIEVAL (UNVERIFIED - TOPICAL MATCH ONLY)"
-+ "Trust: LOW - topically similar ≠ factually relevant"
++ "Trust: LOW - topically similar â‰  factually relevant"
 + "DO NOT use these to override what user said THIS SESSION"
 
 - "EPISODIC RETRIEVAL (conversation-level context)"
@@ -171,12 +191,12 @@ python read_traces.py -v -n 3      # Verbose, last 3
 
 # _format_grep_results():
 - "GREP RESULTS (supplementary to your episodic context)"
-+ "GREP RESULTS (VERIFICATION ONLY - WORD FREQUENCY ≠ MEANING)"
++ "GREP RESULTS (VERIFICATION ONLY - WORD FREQUENCY â‰  MEANING)"
 + "Trust: LOWEST - word counts don't establish facts"
 + "WARNING: User said something? GREP cannot contradict it."
 
 # _format_hot_context():
-+ "═" * 60  # Double-line border for visual weight
++ "â•" * 60  # Double-line border for visual weight
 + "USER GROUND TRUTH (LAST 1 HOUR) - THIS IS LAW"
 + "CONFLICT RESOLUTION: If search says X but user said Y, USER WINS."
 ```
@@ -186,11 +206,11 @@ python read_traces.py -v -n 3      # Verbose, last 3
 ## 2025-12-02 - strange-bassi (production hardening)
 - Unified corpus structure: corpus/, vectors/, indexes/, manifest.json
 - Refactored ingest.py v2.0: dedup BEFORE embedding, incremental merge
-- Created migrate_to_unified.py: consolidates 23K scattered nodes → single files
+- Created migrate_to_unified.py: consolidates 23K scattered nodes â†’ single files
 - Fixed retrieval.py: loads unified or legacy manifests
 
 ## 2025-12-01 - housekeeping
-- Consolidated docs: COLD_START.md + 4 wiring maps → CONTEXT.md (~130 lines)
+- Consolidated docs: COLD_START.md + 4 wiring maps â†’ CONTEXT.md (~130 lines)
 - Purged: cognitive_agent.py, cognitive_twin.py (metacognitive_mirror.py now wired)
 
 ## 2025-11-30 - brave-johnson + artifact-bank

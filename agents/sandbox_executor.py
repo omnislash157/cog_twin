@@ -40,7 +40,7 @@ KNOWN_PACKAGES = {
 }
 
 # Commands allowed to execute (base command only)
-COMMAND_WHITELIST = ['python', 'pytest', 'pip', 'cat', 'ls', 'echo', 'pwd', 'dir', 'type']
+COMMAND_WHITELIST = ['python', 'pytest', 'pip', 'cat', 'ls', 'echo', 'pwd', 'dir', 'type', 'cd', 'npm', 'node', 'npx']
 
 
 class HITLType(Enum):

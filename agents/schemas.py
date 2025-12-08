@@ -29,6 +29,7 @@ class AgentRole(Enum):
     BUDGET = "budget"
     CONVO_HOLDER = "convo_holder"
     CODE_HOLDER = "code_holder"
+    USER_HOLDER = "user_holder"
     MEMORY_ORACLE = "memory_oracle"
     HUMAN = "human"
 

@@ -16,7 +16,8 @@ sys.path.insert(0, str(settings.engine_path))
 from cog_twin import CogTwin
 from chat_parser_agnostic import ChatParserFactory
 from ingest import IngestPipeline
-from agents.swarm_orchestrator import SwarmOrchestrator
+from agents.claude_orchestrator import ClaudeOrchestrator
+from agents.persistence import SwarmPersistence
 
 from app.artifacts.parser import extract_artifacts
 from app.artifacts.actions import ArtifactEmit
@@ -259,7 +260,7 @@ class SwarmConnectionManager:
 swarm_manager = SwarmConnectionManager()
 
 # Active swarm orchestrator
-active_swarm: SwarmOrchestrator | None = None
+active_swarm: ClaudeOrchestrator | None = None
 
 
 # Global CogTwin engine instance
@@ -422,41 +423,51 @@ async def start_swarm(
     request: SwarmStartRequest,
     background_tasks: BackgroundTasks,
 ):
-    """Start a new swarm project."""
+    """Start a new swarm project using Claude Opus orchestrator."""
     global active_swarm
-    
+
     if swarm_manager.swarm_active:
         raise HTTPException(400, "Swarm already running")
-    
+
     project_name = request.project_name
     goal = request.goal
     tasks = request.tasks if request.tasks else ["Implement the requested feature"]
-    
+
     swarm_manager.swarm_active = True
     swarm_manager.current_project = project_name
-    
-    # Create orchestrator with broadcast callback
-    active_swarm = SwarmOrchestrator(
+
+    # Initialize persistence
+    data_dir = settings.engine_path / "agents" / "data"
+    persistence = SwarmPersistence(data_dir)
+
+    # Initialize sandbox path
+    sandbox_root = settings.engine_path / "agents" / "sandbox"
+
+    # Create Claude orchestrator
+    active_swarm = ClaudeOrchestrator(
         project_root=settings.engine_path,
-        project_name=project_name,
-        goal=goal,
-        broadcast_callback=swarm_manager.broadcast
+        sandbox_root=sandbox_root,
+        persistence=persistence,
+        project_id=project_name,
     )
-    
+
     # Run in background
     async def run_swarm():
         global active_swarm
         try:
-            await active_swarm.run_project(tasks)
+            await active_swarm.initialize()
+            await active_swarm.run_project(goal, tasks)
         finally:
+            if active_swarm:
+                await active_swarm.shutdown()
             swarm_manager.swarm_active = False
             active_swarm = None
-    
+
     background_tasks.add_task(run_swarm)
-    
+
     return {
         "status": "started",
-        "project_id": active_swarm.project.id,
+        "project_id": project_name,
         "project_name": project_name,
         "goal": goal,
         "tasks": tasks,

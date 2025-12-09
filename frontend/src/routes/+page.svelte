@@ -13,6 +13,9 @@
 	import { marked } from 'marked';
 
 	// Configure marked for safe inline rendering
+	import { showSwarm, showMemorySpace, showAnalytics, config } from '$lib/stores/config';
+
+	// Configure marked for safe inline rendering
 	marked.setOptions({
 		breaks: true,
 		gfm: true
@@ -216,7 +219,8 @@
 
 	<!-- Main Content -->
 	<main class="dashboard-main">
-		<!-- 3D Memory Space Panel -->
+		<!-- 3D Memory Space Panel (only in full mode) -->
+		{#if $showMemorySpace}
 		<FloatingPanel panelId="memory3d" title="Memory Space" icon="🧠">
 			<div class="memory-space-content">
 				<MemoryCanvas
@@ -232,6 +236,7 @@
 				/>
 			</div>
 		</FloatingPanel>
+		{/if}
 
 		<!-- Right side container for docked panels -->
 		<div class="right-panels" class:has-docked={$panels.chat.mode === 'docked' || $panels.artifacts.mode === 'docked' || $panels.analytics.mode === 'docked' || $panels.swarm?.mode === 'docked'}>
@@ -280,15 +285,19 @@
 				</div>
 			</FloatingPanel>
 
-			<!-- Analytics Panel -->
+			<!-- Analytics Panel (only if enabled) -->
+			{#if $showAnalytics}
 			<FloatingPanel panelId="analytics" title="Cognitive State" icon="📊">
 				<AnalyticsDashboard />
 			</FloatingPanel>
+			{/if}
 
-			<!-- Swarm Dashboard Panel -->
+			<!-- Swarm Dashboard Panel (only if enabled) -->
+			{#if $showSwarm}
 			<FloatingPanel panelId="swarm" title="Swarm Dashboard" icon="🐝">
 				<SwarmPanel />
 			</FloatingPanel>
+			{/if}
 		</div>
 	</main>
 

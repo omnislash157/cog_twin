@@ -1,0 +1,140 @@
+# ENTERPRISE DEPLOYMENT Configuration
+# Config-driven multi-tenant with feature flags
+#
+# Tier System:
+#   basic    - Context stuffing only, no memory pipelines (warehouse/HR users)
+#   advanced - Memory pipelines enabled, no swarm/3D viz
+#   full     - Everything (your personal CogTwin experience)
+
+# =============================================================================
+# DEPLOYMENT MODE
+# =============================================================================
+deployment:
+  mode: enterprise                    # personal | enterprise
+  tier: basic                         # basic | advanced | full
+  
+  # Tenant validation (who can log in)
+  auth:
+    type: domain                      # domain | azure_ad | open
+    allowed_domains:
+      - driscollfoods.com             # Add more domains as needed
+      - driscoll.com
+
+# =============================================================================
+# FEATURE FLAGS - The switches that control everything
+# =============================================================================
+features:
+  # Backend features
+  memory_pipelines: false             # Master switch for all 4 lanes
+  context_stuffing: true              # Load docs into context window
+  tenant_isolation: true              # SQL-backed multi-tenant
+  usage_logging: true                 # Track tokens per user/division
+  
+  # Frontend features (passed to client)
+  ui:
+    swarm_loop: false                 # Recursive swarm visualization
+    memory_space_3d: false            # Threlte 3D memory explorer
+    chat_basic: true                  # Simple chat interface
+    dark_mode: true                   # Theme preference
+
+# =============================================================================
+# MEMORY LANES (only active when memory_pipelines: true)
+# =============================================================================
+memory:
+  enabled: false                      # Redundant but explicit
+  lanes:
+    process: false                    # FAISS clustering
+    episodic: false                   # Conversation arcs
+    grep: false                       # BM25 keyword search
+    squirrel: false                   # Temporal recall
+
+# =============================================================================
+# CONTEXT STUFFING (active when memory_pipelines: false)
+# =============================================================================
+docs:
+  docs_dir: ./manuals/Driscoll
+  
+  stuffing:
+    enabled: true
+    max_tokens_per_division: 200000   # 200K tokens (10% of 2M window)
+  
+  # Division -> document categories
+  division_categories:
+    sales: []                         # Sales reps don't need manuals
+    transportation:
+      - transportation
+      - safety
+    operations:
+      - operations
+      - safety
+      - hr
+    default:
+      - general
+
+# =============================================================================
+# VOICE TEMPLATES
+# =============================================================================
+voice:
+  default: corporate
+  
+  templates:
+    corporate:
+      personality: professional
+      snark_level: 0
+      file: voices/corporate.yaml     # Optional external template
+    
+    troll:
+      personality: sarcastic
+      snark_level: 7
+      file: voices/troll.yaml
+  
+  # Division -> voice mapping
+  division_voice:
+    sales: corporate
+    transportation: troll
+    operations: corporate
+    default: corporate
+
+# =============================================================================
+# DATABASE (MS SQL for tenant management)
+# =============================================================================
+database:
+  # Connection string from environment: ENTERPRISE_SQL_CONN
+  # Falls back to: DRISCOLL_SQL_CONN for backward compat
+  env_var: ENTERPRISE_SQL_CONN
+  
+  tables:
+    tenants: cog_tenants
+    sessions: cog_sessions
+    usage: cog_usage
+
+# =============================================================================
+# MODEL SETTINGS
+# =============================================================================
+model:
+  provider: xai
+  name: grok-4-fast-reasoning
+  max_tokens: 8192
+  temperature: 0.5                    # Lower for consistent corporate voice
+  context_window: 2000000
+
+# =============================================================================
+# RETRIEVAL (only when memory_pipelines: true)
+# =============================================================================
+retrieval:
+  process_top_k: 10
+  episodic_top_k: 5
+  min_score: 0.3
+
+# =============================================================================
+# SESSION / AUTH
+# =============================================================================
+session:
+  token_expiry_hours: 24
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+logging:
+  level: INFO
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

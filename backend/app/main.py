@@ -19,6 +19,24 @@ from ingest import IngestPipeline
 from agents.claude_orchestrator import ClaudeOrchestrator
 from agents.persistence import SwarmPersistence
 
+
+# Enterprise mode support
+try:
+    from config_loader import (
+        load_config as load_enterprise_config,
+        cfg as enterprise_cfg,
+        memory_enabled,
+        is_enterprise_mode,
+        get_ui_features,
+    )
+    from enterprise_twin import EnterpriseTwin
+    ENTERPRISE_AVAILABLE = True
+except ImportError:
+    ENTERPRISE_AVAILABLE = False
+    def memory_enabled(): return True
+    def is_enterprise_mode(): return False
+    def get_ui_features(): return {"chat_basic": True, "dark_mode": True, "swarm_loop": True, "memory_space_3d": True}
+
 from app.artifacts.parser import extract_artifacts
 from app.artifacts.actions import ArtifactEmit
 
@@ -44,6 +62,38 @@ async def health():
         "app": settings.app_name,
         "engine_path": str(settings.engine_path),
         "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+# ===== ENTERPRISE CONFIG ENDPOINT =====
+
+@app.get("/api/config")
+async def get_client_config():
+    """
+    Return UI feature flags and deployment info to frontend.
+
+    Called once on page load to determine what UI components to render.
+    """
+    if not ENTERPRISE_AVAILABLE:
+        # Full mode - all features enabled
+        return {
+            "features": {
+                "swarm_loop": True,
+                "memory_space_3d": True,
+                "chat_basic": True,
+                "dark_mode": True,
+                "analytics_dashboard": True,
+            },
+            "tier": "full",
+            "mode": "personal",
+            "memory_enabled": True,
+        }
+
+    return {
+        "features": get_ui_features(),
+        "tier": enterprise_cfg('deployment.tier', 'full'),
+        "mode": enterprise_cfg('deployment.mode', 'personal'),
+        "memory_enabled": memory_enabled(),
     }
 
 
@@ -263,16 +313,25 @@ swarm_manager = SwarmConnectionManager()
 active_swarm: ClaudeOrchestrator | None = None
 
 
-# Global CogTwin engine instance
+
+# Global engine instance - CogTwin or EnterpriseTwin
 engine: CogTwin | None = None
 
 
 @app.on_event("startup")
 async def startup_event():
     global engine
-    print("[STARTUP] Initializing CogTwin engine...")
-    engine = CogTwin(settings.data_dir)
-    print(f"[STARTUP] CogTwin ready. Process memories: {len(engine.retriever.process.nodes)}")
+
+    # Check if enterprise mode
+    if ENTERPRISE_AVAILABLE and is_enterprise_mode():
+        print("[STARTUP] Initializing EnterpriseTwin (enterprise mode)...")
+        engine = EnterpriseTwin(data_dir=settings.data_dir)
+        await engine.start()
+        print(f"[STARTUP] EnterpriseTwin ready. Memory mode: {engine._memory_mode}")
+    else:
+        print("[STARTUP] Initializing CogTwin engine...")
+        engine = CogTwin(settings.data_dir)
+        print(f"[STARTUP] CogTwin ready. Process memories: {len(engine.retriever.process.nodes)}")
 
 
 async def run_ingest(job_id: str, filepath: Path, provider: str):

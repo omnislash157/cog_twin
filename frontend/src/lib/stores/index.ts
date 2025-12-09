@@ -10,3 +10,5 @@ export { workspaces, activeWorkspace, workspaceCount } from './workspaces';
 export type { Workspace, WorkspacesState } from './workspaces';
 export { swarm, currentAgentTurn, waveProgress, latestFailure, latestFileWrite, AGENT_ORDER } from './swarm';
 export type { SwarmState, AgentState, AgentTurn, SwarmFailure, FileWrite, WaveSummary, AgentName, AgentStatus } from './swarm';
+export { config, configLoading, loadConfig, isEnterpriseMode, isBasicTier, isMemoryEnabled, showSwarm, showMemorySpace, showAnalytics } from './config';
+export type { AppConfig } from './config';
